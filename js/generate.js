@@ -62,17 +62,19 @@ async function aiChat(messages, apiKey, model) {
       },
       body: JSON.stringify({
         model: model || 'claude-opus-4-6',
-        max_tokens: 8192,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: 'high' },
+        max_tokens: 2048,
         system,
         messages: userMsgs,
       }),
     })
-    if (!res.ok) throw new Error('Anthropic API error: ' + res.status)
+    if (!res.ok) throw new Error('Anthropic API error: ' + res.status + ' ' + await res.text())
     const data = await res.json()
     const textBlock = data.content?.find(b => b.type === 'text')
-    return textBlock?.text || ''
+    if (!textBlock?.text) {
+      console.error('Anthropic returned no text block', { stop_reason: data.stop_reason, usage: data.usage, content_types: data.content?.map(b => b.type) })
+      throw new Error('Empty response from AI (stop_reason: ' + (data.stop_reason || 'unknown') + ')')
+    }
+    return textBlock.text
   }
 
   // OpenAI-compatible (Groq or OpenAI)
