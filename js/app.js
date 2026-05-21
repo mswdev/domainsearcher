@@ -277,7 +277,7 @@ async function checkOne() {
     const aiKey = loadSetting('aiApiKey') || undefined
     const synonymPrompt = document.getElementById('synonymsPromptBox')?.value || loadSetting('synonymPrompt') || undefined
     let synonyms = []
-    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off') } catch {}
+    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off'); trackCost(loadSetting('creativeModel')) } catch {}
 
     if (synonyms.length) {
       html += '<div class="text-xs text-cyan-500 font-medium mt-3 mb-1">synonyms of "' + name + '"</div>'
@@ -658,6 +658,7 @@ async function loadFavData(favorites) {
   if (needFit.length && fitContext) {
     try {
       const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey, undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+      trackCost(loadSetting('scoringModel'))
       for (const d of needFit) {
         if (scores[d.domain] !== undefined) {
           const s = scores[d.domain]
@@ -675,6 +676,7 @@ async function loadFavData(favorites) {
   if (needAssoc.length) {
     try {
       const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+      trackCost(loadSetting('creativeModel'))
       for (const d of needAssoc) {
         if (assocs[d.domain]) {
           assocCache[d.id] = assocs[d.domain]
@@ -722,6 +724,7 @@ async function refreshAssociations() {
   const assocPrompt = getAssocPrompt()
   try {
     const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+    trackCost(loadSetting('creativeModel'))
     const updated = Object.keys(assocs).length
     if (!updated) throw new Error('AI returned no associations — check API key or prompt')
     for (const d of favorites) {
@@ -783,6 +786,7 @@ async function rescoreFit() {
   const fitPrompt = document.getElementById('fitPromptBox')?.value || loadSetting('fitPrompt') || undefined
   try {
     const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+    trackCost(loadSetting('scoringModel'))
     for (const d of favorites) {
       if (scores[d.domain] !== undefined) {
         const s = scores[d.domain]
@@ -1022,6 +1026,7 @@ async function startSearch() {
     let names
     try {
       names = await generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
+      trackCost(loadSetting('creativeModel'))
     } catch (e) {
       document.getElementById('statusMsg').textContent = 'Error: ' + e.message
       searchDone()
@@ -1705,13 +1710,16 @@ let _loopStatusTimer = null
 let _loopBackoffMultiplier = 1
 let _loopTotalCost = 0
 
-// Per-million-token pricing (USD) for the Anthropic models we support.
-// in = input, out = output, cc = cache_creation_input, cr = cache_read_input.
+// Per-million-token pricing (USD). cc/cr only meaningful on Anthropic.
 const PRICING = {
-  'claude-opus-4-7':   { in: 5,  out: 25, cc: 6.25, cr: 0.50 },
-  'claude-opus-4-6':   { in: 5,  out: 25, cc: 6.25, cr: 0.50 },
-  'claude-sonnet-4-6': { in: 3,  out: 15, cc: 3.75, cr: 0.30 },
-  'claude-haiku-4-5':  { in: 1,  out: 5,  cc: 1.25, cr: 0.10 },
+  'claude-opus-4-7':           { in: 5,    out: 25,  cc: 6.25, cr: 0.50 },
+  'claude-opus-4-6':           { in: 5,    out: 25,  cc: 6.25, cr: 0.50 },
+  'claude-sonnet-4-6':         { in: 3,    out: 15,  cc: 3.75, cr: 0.30 },
+  'claude-haiku-4-5':          { in: 1,    out: 5,   cc: 1.25, cr: 0.10 },
+  'gpt-4o':                    { in: 2.5,  out: 10,  cc: 0,    cr: 1.25 },
+  'gpt-4o-mini':               { in: 0.15, out: 0.60,cc: 0,    cr: 0.075 },
+  'llama-3.3-70b-versatile':   { in: 0.59, out: 0.79,cc: 0,    cr: 0 },
+  'llama-3.1-8b-instant':      { in: 0.05, out: 0.08,cc: 0,    cr: 0 },
 }
 
 function estimateCost(usage, model) {
@@ -1724,6 +1732,30 @@ function estimateCost(usage, model) {
     (usage.cache_creation_input_tokens || 0) * p.cc / 1_000_000 +
     (usage.cache_read_input_tokens || 0) * p.cr / 1_000_000
   )
+}
+
+let _sessionTotalCost = 0
+let _lastCallCost = 0
+
+function trackCost(model) {
+  const c = estimateCost(getLastUsage(), model)
+  if (c > 0) {
+    _lastCallCost = c
+    _sessionTotalCost += c
+    renderCostIndicator()
+  }
+  return c
+}
+
+function fmtCost(n) {
+  if (n < 0.01) return '<$0.01'
+  return '$' + n.toFixed(2)
+}
+
+function renderCostIndicator() {
+  const el = document.getElementById('costIndicator')
+  if (!el) return
+  el.textContent = 'last ' + fmtCost(_lastCallCost) + ' · session ' + fmtCost(_sessionTotalCost)
 }
 
 function populateLoopPickers() {
@@ -2022,8 +2054,9 @@ async function refreshLoopEventLog() {
       const div = document.createElement('div')
       const t = (l.timestamp || '').slice(11, 19)
       const errPart = l.error ? ' ERROR: ' + l.error : ''
+      const costPart = (typeof l.cost === 'number' && l.cost > 0) ? ' cost=' + fmtCost(l.cost) : ''
       div.textContent = '[' + t + '] iter#' + l.iteration + ': gen=' + (l.generated || 0) +
-        ' fresh=' + (l.fresh || 0) + ' avail=' + (l.available || 0) + errPart
+        ' fresh=' + (l.fresh || 0) + ' avail=' + (l.available || 0) + costPart + errPart
       el.appendChild(div)
     }
   } catch {}
