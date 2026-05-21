@@ -135,7 +135,17 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
     throw new AIAPIError(res.status, await res.text())
   }
   const data = await res.json()
-  _lastUsage = data.usage || null
+  if (data.usage) {
+    const cached = data.usage.prompt_tokens_details?.cached_tokens || 0
+    _lastUsage = {
+      input_tokens: Math.max(0, (data.usage.prompt_tokens || 0) - cached),
+      output_tokens: data.usage.completion_tokens || 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: cached,
+    }
+  } else {
+    _lastUsage = null
+  }
   return data.choices?.[0]?.message?.content || ''
 }
 
