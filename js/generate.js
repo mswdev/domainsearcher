@@ -44,14 +44,40 @@ export function detectProvider(key) {
   return 'Unknown'
 }
 
-async function aiChat(messages, apiKey, model) {
+function buildAnthropicBody(model, preset, system, userMsgs) {
+  const base = { model, system, messages: userMsgs }
+  if (preset === 'off') {
+    return { ...base, max_tokens: model.includes('haiku') ? 2048 : 4096 }
+  }
+  if (preset === 'balanced') {
+    return { ...base, max_tokens: 16000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
+  }
+  if (preset === 'max') {
+    let maxTokens, effort
+    if (model === 'claude-opus-4-7') { maxTokens = 24000; effort = 'xhigh' }
+    else if (model === 'claude-opus-4-6') { maxTokens = 20000; effort = 'max' }
+    else if (model === 'claude-sonnet-4-6') { maxTokens = 16000; effort = 'max' }
+    else { maxTokens = 4096; effort = null }
+    const body = { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' } }
+    if (effort) body.output_config = { effort }
+    return body
+  }
+  return { ...base, max_tokens: 4096 }
+}
+
+async function aiChat(messages, apiKey, model, preset = 'off') {
   const key = apiKey || BUNDLED_API_KEY
   const provider = detectProvider(key)
+  const resolvedAnthropicModel = model || 'claude-opus-4-6'
+
+  if (preset !== 'off' && (provider !== 'Claude (Anthropic)' || resolvedAnthropicModel.includes('haiku'))) {
+    preset = 'off'
+  }
 
   if (provider === 'Claude (Anthropic)') {
-    // Anthropic Messages API
     const system = messages.find(m => m.role === 'system')?.content
     const userMsgs = messages.filter(m => m.role !== 'system')
+    const body = buildAnthropicBody(resolvedAnthropicModel, preset, system, userMsgs)
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -60,12 +86,7 @@ async function aiChat(messages, apiKey, model) {
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify({
-        model: model || 'claude-opus-4-6',
-        max_tokens: 2048,
-        system,
-        messages: userMsgs,
-      }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error('Anthropic API error: ' + res.status + ' ' + await res.text())
     const data = await res.json()
@@ -125,12 +146,12 @@ Rules:
 
 Return ONLY a JSON array of {{count}} strings, no other text. Example: ["agentix","proxima","condukt","envoyai","meshkey","vaultly","humanapi","autoplex","agenthq","delegata"]`
 
-export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60) {
+export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60, preset = 'off') {
   const resolvedPrompt = (systemPrompt || DEFAULT_SYSTEM_PROMPT).replaceAll('{{count}}', String(batchSize))
   const text = await aiChat([
     { role: 'system', content: resolvedPrompt },
     { role: 'user', content: `Idea: ${description}` },
-  ], apiKey, model)
+  ], apiKey, model, preset)
 
   if (!text) throw new Error('Empty response from AI')
 
@@ -150,7 +171,7 @@ export const DEFAULT_FIT_PROMPT = `Score each domain name on four dimensions (0â
 Return ONLY a JSON object. Example:
 {"copygen.ai": {"fit": 8, "pro": 7, "mem": 8, "brd": 6}, "wordblast.io": {"fit": 5, "pro": 9, "mem": 7, "brd": 5}}`
 
-export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model) {
+export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, preset = 'off') {
   if (!domains.length || !context.trim()) return {}
 
   const promptTemplate = fitPrompt || DEFAULT_FIT_PROMPT
@@ -159,7 +180,7 @@ export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model) 
   const text = await aiChat([
     { role: 'system', content: systemContent },
     { role: 'user', content: domains.join('\n') },
-  ], apiKey, model)
+  ], apiKey, model, preset)
 
   const raw = extractJson(text)
   if (!raw || typeof raw !== 'object') return {}
@@ -189,11 +210,11 @@ export const DEFAULT_SYNONYM_PROMPT = `Given a domain name stem, return exactly 
 Vary the angle: include near-synonyms, evocative alternatives, and metaphorical variants.
 Return ONLY a JSON array of strings: ["word1", "word2", "word3", "word4", "word5", "word6"]`
 
-export async function generateSynonyms(stem, apiKey, systemPrompt, model) {
+export async function generateSynonyms(stem, apiKey, systemPrompt, model, preset = 'off') {
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_SYNONYM_PROMPT },
     { role: 'user', content: stem },
-  ], apiKey, model)
+  ], apiKey, model, preset)
   const arr = extractJson(text)
   if (!Array.isArray(arr)) return []
   return arr.filter(w => typeof w === 'string' && /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(w)).slice(0, 6)
@@ -215,7 +236,7 @@ const TLD_MEANINGS = {
   ly: 'short or action-oriented brand',
 }
 
-export async function associateDomains(domains, apiKey, systemPrompt, model) {
+export async function associateDomains(domains, apiKey, systemPrompt, model, preset = 'off') {
   if (!domains.length) return {}
 
   // Annotate each domain with its TLD meaning so the AI cannot ignore it
@@ -228,7 +249,7 @@ export async function associateDomains(domains, apiKey, systemPrompt, model) {
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_ASSOC_PROMPT },
     { role: 'user', content: annotated.join('\n') },
-  ], apiKey, model)
+  ], apiKey, model, preset)
 
   const assocs = extractJson(text)
   if (!assocs || typeof assocs !== 'object') return {}

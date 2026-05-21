@@ -57,43 +57,9 @@
           class="inline-flex items-center gap-1.5 px-2 sm:px-3 py-2 border border-gray-300 hover:border-cyan-400 hover:text-cyan-600 text-gray-500 text-sm font-medium rounded-lg transition-colors whitespace-nowrap">
           <span class="hidden sm:inline">Guide</span><span class="sm:hidden">?</span>
         </a>
-        <a href="https://github.com/vasilytrofimchuk/domainsearcher-app/issues/new?labels=bug&title=Bug:+" target="_blank" rel="noopener" aria-label="Report Bug"
-          class="inline-flex items-center gap-1.5 px-2 sm:px-3 py-2 border border-gray-300 hover:border-red-300 hover:text-red-600 text-gray-500 text-sm font-medium rounded-lg transition-colors whitespace-nowrap">
-          <span class="hidden sm:inline">Report Bug</span><span class="sm:hidden">!</span>
-        </a>
-        <a href="https://github.com/vasilytrofimchuk/domainsearcher-app" target="_blank" rel="noopener" aria-label="Star on GitHub"
-          class="inline-flex items-center gap-2 px-2 sm:px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap">
-          <svg height="16" viewBox="0 0 16 16" width="16" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
-          <span class="hidden sm:inline">Star on GitHub</span>
-          <span id="ghStarsTop" class="bg-gray-700 text-gray-200 text-xs px-1.5 py-0.5 rounded hidden"></span>
-        </a>
       </div>
     </div>
-    <p class="text-gray-600 mb-3">Describe your idea and find available domains</p>
-    <div class="flex flex-wrap items-center gap-3 mb-3 px-4 py-2.5 bg-gray-50 rounded-xl text-sm text-gray-500 border border-gray-100">
-      <span class="text-base">🔒</span>
-      <span><strong class="text-gray-700">100% private.</strong> All your data stays in your browser (localStorage). Nothing is sent to our servers — only direct AI API calls to Groq/OpenAI/Anthropic and availability checks to rdap.org.</span>
-      <span class="text-gray-300">·</span>
-      <span class="text-base">🌐</span>
-      <span><strong class="text-gray-700">Open source.</strong> <a href="https://github.com/vasilytrofimchuk/domainsearcher-app" target="_blank" rel="noopener" class="text-cyan-600 hover:underline">View code on GitHub</a></span>
-    </div>
-    <div id="howItWorks" class="relative grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 text-sm">
-      <button onclick="document.getElementById('howItWorks').remove();localStorage.setItem('hideHowItWorks','1')"
-        class="absolute -top-1 -right-1 w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 hover:bg-gray-300 text-gray-500 hover:text-gray-700 text-xs leading-none transition-colors z-10" aria-label="Dismiss">&times;</button>
-      <div class="flex items-start gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
-        <span class="text-lg leading-none mt-0.5">1.</span>
-        <div><span class="font-semibold text-gray-800">Describe your idea</span><br><span class="text-gray-500">AI generates 60 brandable domain candidates</span></div>
-      </div>
-      <div class="flex items-start gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
-        <span class="text-lg leading-none mt-0.5">2.</span>
-        <div><span class="font-semibold text-gray-800">Star your favorites</span><br><span class="text-gray-500">Check availability across 10+ TLDs in real time</span></div>
-      </div>
-      <div class="flex items-start gap-3 bg-white border border-gray-200 rounded-lg px-4 py-3">
-        <span class="text-lg leading-none mt-0.5">3.</span>
-        <div><span class="font-semibold text-gray-800">Score &amp; rank</span><br><span class="text-gray-500">Pick the winner by memorability, brandability &amp; fit</span></div>
-      </div>
-    </div>
-    <script>if(localStorage.getItem('hideHowItWorks'))document.getElementById('howItWorks')?.remove()</script>
+    <p class="text-gray-600 mb-6">Describe your idea and find available domains</p>
 
     <div class="flex flex-col gap-6">
 
@@ -133,11 +99,20 @@
                 + synonyms
               </button>
               <div id="synonymsPromptControls" class="hidden flex items-center gap-2">
-                <button onclick="document.getElementById('synonymsPromptBox').classList.toggle('hidden')" class="text-xs text-cyan-500 hover:text-cyan-700">▾ prompt</button>
+                <button onclick="document.getElementById('synonymsPromptBox').classList.toggle('hidden');document.getElementById('synonymPromptPickerRow').classList.toggle('hidden')" class="text-xs text-cyan-500 hover:text-cyan-700">▾ prompt</button>
                 <button id="saveSynonymPromptBtn" onclick="saveSynonymPrompt(true)" class="hidden text-xs bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-2 py-0.5 rounded transition-colors">Save</button>
                 <button onclick="resetSynonymPrompt()" class="text-xs text-gray-300 hover:text-gray-500">reset</button>
                 <span id="synonymPromptSaved" class="text-xs text-green-500 hidden">saved</span>
               </div>
+            </div>
+            <div id="synonymPromptPickerRow" class="hidden flex items-center gap-2 mt-2 flex-wrap">
+              <select id="synonymPromptPicker" onchange="onSynonymPromptPicked()"
+                class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                <option value="">— Choose saved prompt —</option>
+              </select>
+              <button onclick="onSynonymPromptSave()" class="text-xs bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save as…</button>
+              <button onclick="onSynonymPromptUpdate()" class="text-xs text-cyan-600 border border-cyan-200 hover:border-cyan-400 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Update</button>
+              <button onclick="onSynonymPromptDelete()" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Delete</button>
             </div>
             <textarea id="synonymsPromptBox" rows="3" class="hidden mt-1 w-full border border-cyan-100 rounded-lg px-3 py-2 text-xs font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-cyan-400 resize-y"></textarea>
             <div id="checkResult" class="mt-3 hidden"></div>
@@ -181,16 +156,30 @@
                     class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
                     <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
                   </select>
+                  <select id="creativePreset" onchange="onCreativePresetChange(this.value)"
+                    class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                    <option value="off">Off (cheapest)</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="max">Max</option>
+                  </select>
+                  <span id="creativeCostBadge" class="text-base" title="Cost tier">🟢</span>
                 </div>
-                <p class="text-[11px] text-gray-400 pl-26 ml-24">Creative — generation + synonyms + associations</p>
+                <p class="text-[11px] text-gray-400 pl-26 ml-24">Creative — generation + synonyms + associations. Off = no thinking. Balanced/Max bills thinking tokens at output rate.</p>
                 <div class="flex items-center gap-2 flex-wrap">
                   <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Scoring</label>
                   <select id="scoringModel" onchange="onScoringModelChange(this.value)"
                     class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
                     <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
                   </select>
+                  <select id="scoringPreset" onchange="onScoringPresetChange(this.value)"
+                    class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                    <option value="off">Off (cheapest)</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="max">Max</option>
+                  </select>
+                  <span id="scoringCostBadge" class="text-base" title="Cost tier">🟢</span>
                 </div>
-                <p class="text-[11px] text-gray-400 ml-24">Scoring — fit / pronounceability / memorability / brand</p>
+                <p class="text-[11px] text-gray-400 ml-24">Scoring — fit / pronounceability / memorability / brand. Off = no thinking. Balanced/Max bills thinking tokens at output rate.</p>
                 <div class="flex items-center gap-2 flex-wrap">
                   <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Names per search</label>
                   <input id="batchSize" type="number" min="10" max="200" step="10" value="60"
@@ -202,6 +191,15 @@
             </div>
           </div>
           <label class="block text-sm font-medium text-gray-700 mb-2">Describe your idea</label>
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <select id="ideaPicker" onchange="onIdeaPicked()"
+              class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+              <option value="">— Choose saved idea —</option>
+            </select>
+            <button onclick="onIdeaSave()" class="text-xs bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save as…</button>
+            <button onclick="onIdeaUpdate()" class="text-xs text-cyan-600 border border-cyan-200 hover:border-cyan-400 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Update</button>
+            <button onclick="onIdeaDelete()" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Delete</button>
+          </div>
           <textarea id="description" rows="3" placeholder="e.g. AI tool for generating marketing copy and ad creatives"
             class="w-full border border-gray-300 rounded-lg px-4 py-3 text-gray-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent resize-none"
             oninput="onDescriptionInput()"></textarea>
@@ -230,10 +228,19 @@
           <!-- Editable system prompt -->
           <div class="mt-3">
             <div class="flex items-center gap-3">
-              <button onclick="document.getElementById('promptBox').classList.toggle('hidden')" class="text-xs text-gray-400 hover:text-gray-600">&#9660; generation prompt</button>
+              <button onclick="document.getElementById('promptBox').classList.toggle('hidden');document.getElementById('generationPromptPickerRow').classList.toggle('hidden')" class="text-xs text-gray-400 hover:text-gray-600">&#9660; generation prompt</button>
               <button id="savePromptBtn" onclick="saveGenPrompt(true)" class="hidden text-sm bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-3 py-1 rounded-lg transition-colors">Save prompt</button>
               <button onclick="resetPrompt()" class="text-xs text-gray-300 hover:text-gray-500">reset default</button>
               <span id="promptSaved" class="text-xs text-green-500 hidden">saved</span>
+            </div>
+            <div id="generationPromptPickerRow" class="hidden flex items-center gap-2 mt-2 flex-wrap">
+              <select id="generationPromptPicker" onchange="onGenerationPromptPicked()"
+                class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                <option value="">— Choose saved prompt —</option>
+              </select>
+              <button onclick="onGenerationPromptSave()" class="text-xs bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save as…</button>
+              <button onclick="onGenerationPromptUpdate()" class="text-xs text-cyan-600 border border-cyan-200 hover:border-cyan-400 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Update</button>
+              <button onclick="onGenerationPromptDelete()" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Delete</button>
             </div>
             <textarea id="promptBox" rows="8" class="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-cyan-400 resize-y hidden"></textarea>
           </div>
@@ -303,10 +310,19 @@
                 <!-- FIT prompt (collapsible) -->
                 <div class="mt-2">
                   <div class="flex items-center gap-3">
-                    <button onclick="document.getElementById('fitPromptBox').classList.toggle('hidden')" class="text-xs text-purple-400 hover:text-purple-600">&#9660; fit scoring prompt</button>
+                    <button onclick="document.getElementById('fitPromptBox').classList.toggle('hidden');document.getElementById('scoringPromptPickerRow').classList.toggle('hidden')" class="text-xs text-purple-400 hover:text-purple-600">&#9660; fit scoring prompt</button>
                     <button id="saveFitPromptBtn" onclick="saveFitPrompt(true)" class="hidden text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold px-3 py-1 rounded-lg transition-colors">Save prompt</button>
                     <button onclick="resetFitPrompt()" class="text-xs text-gray-300 hover:text-gray-500">reset default</button>
                     <span id="fitPromptSaved" class="text-xs text-green-500 hidden">saved</span>
+                  </div>
+                  <div id="scoringPromptPickerRow" class="hidden flex items-center gap-2 mt-2 flex-wrap">
+                    <select id="scoringPromptPicker" onchange="onScoringPromptPicked()"
+                      class="flex-1 min-w-0 border border-purple-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400 bg-white">
+                      <option value="">— Choose saved prompt —</option>
+                    </select>
+                    <button onclick="onScoringPromptSave()" class="text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save as…</button>
+                    <button onclick="onScoringPromptUpdate()" class="text-xs text-purple-600 border border-purple-200 hover:border-purple-400 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Update</button>
+                    <button onclick="onScoringPromptDelete()" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Delete</button>
                   </div>
                   <textarea id="fitPromptBox" rows="6" class="hidden mt-1 w-full border border-purple-100 rounded-lg px-3 py-2 text-xs font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-purple-400 resize-y"></textarea>
                 </div>
@@ -332,10 +348,19 @@
                 <!-- Association prompt (collapsible) -->
                 <div class="mt-2">
                   <div class="flex items-center gap-3">
-                    <button onclick="document.getElementById('assocPromptBox').classList.toggle('hidden')" class="text-xs text-purple-400 hover:text-purple-600">&#9660; association prompt</button>
+                    <button onclick="document.getElementById('assocPromptBox').classList.toggle('hidden');document.getElementById('associationPromptPickerRow').classList.toggle('hidden')" class="text-xs text-purple-400 hover:text-purple-600">&#9660; association prompt</button>
                     <button id="saveAssocPromptBtn" onclick="saveAssocPrompt(true)" class="hidden text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold px-3 py-1 rounded-lg transition-colors">Save prompt</button>
                     <button onclick="resetAssocPrompt()" class="text-xs text-gray-300 hover:text-gray-500">reset default</button>
                     <span id="assocPromptSaved" class="text-xs text-green-500 hidden">saved</span>
+                  </div>
+                  <div id="associationPromptPickerRow" class="hidden flex items-center gap-2 mt-2 flex-wrap">
+                    <select id="associationPromptPicker" onchange="onAssociationPromptPicked()"
+                      class="flex-1 min-w-0 border border-purple-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-purple-400 bg-white">
+                      <option value="">— Choose saved prompt —</option>
+                    </select>
+                    <button onclick="onAssociationPromptSave()" class="text-xs bg-purple-600 hover:bg-purple-700 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save as…</button>
+                    <button onclick="onAssociationPromptUpdate()" class="text-xs text-purple-600 border border-purple-200 hover:border-purple-400 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Update</button>
+                    <button onclick="onAssociationPromptDelete()" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2.5 py-1.5 rounded-lg whitespace-nowrap">Delete</button>
                   </div>
                   <textarea id="assocPromptBox" rows="5" class="hidden mt-1 w-full border border-purple-100 rounded-lg px-3 py-2 text-xs font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-purple-400 resize-y"></textarea>
                 </div>
@@ -472,42 +497,16 @@
   <!-- Footer -->
   <footer class="mt-10 border-t border-gray-200 bg-white">
     <div class="w-full max-w-[1800px] mx-auto px-4 lg:px-8 py-6">
-      <!-- Links row -->
-      <div class="flex flex-wrap items-center justify-between gap-4">
-        <div class="flex items-center gap-4 text-sm text-gray-400">
-          <a href="/guide.html" class="hover:text-gray-600">Guide</a>
-          <span>·</span>
-          <a href="/privacy.html" class="hover:text-gray-600">Privacy Policy</a>
-          <span>·</span>
-          <a href="/terms.html" class="hover:text-gray-600">Terms of Use</a>
-          <span>·</span>
-          <a href="https://github.com/vasilytrofimchuk/domainsearcher-app" target="_blank" rel="noopener" class="hover:text-gray-600">GitHub</a>
-        </div>
-        <!-- GitHub Star button -->
-        <a href="https://github.com/vasilytrofimchuk/domainsearcher-app" target="_blank" rel="noopener"
-          class="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-lg transition-colors">
-          <svg height="16" viewBox="0 0 16 16" width="16" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
-          Star on GitHub
-          <span id="ghStars" class="bg-gray-700 text-gray-200 text-xs px-1.5 py-0.5 rounded hidden"></span>
-        </a>
+      <div class="flex items-center gap-4 text-sm text-gray-400">
+        <a href="/guide.html" class="hover:text-gray-600">Guide</a>
+        <span>·</span>
+        <a href="/privacy.html" class="hover:text-gray-600">Privacy Policy</a>
+        <span>·</span>
+        <a href="/terms.html" class="hover:text-gray-600">Terms of Use</a>
       </div>
     </div>
   </footer>
 
   <script type="module" src="js/app.js?v=20"></script>
-  <script>
-    // Fetch GitHub star count
-    fetch('https://api.github.com/repos/vasilytrofimchuk/domainsearcher-app')
-      .then(r => r.json())
-      .then(d => {
-        if (d.stargazers_count != null) {
-          document.querySelectorAll('#ghStars, #ghStarsTop').forEach(el => {
-            el.textContent = d.stargazers_count
-            el.classList.remove('hidden')
-          })
-        }
-      })
-      .catch(() => {})
-  </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-import { db, saveSetting, loadSetting, hydrate } from './storage.js?v=15'
+import { db, saveSetting, loadSetting, hydrate, lib } from './storage.js?v=15'
 import { checkDomainAvailable, checkMultipleZones } from './check.js?v=15'
 import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT } from './generate.js?v=15'
 
@@ -277,7 +277,7 @@ async function checkOne() {
     const aiKey = loadSetting('aiApiKey') || undefined
     const synonymPrompt = document.getElementById('synonymsPromptBox')?.value || loadSetting('synonymPrompt') || undefined
     let synonyms = []
-    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel')) } catch {}
+    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off') } catch {}
 
     if (synonyms.length) {
       html += '<div class="text-xs text-cyan-500 font-medium mt-3 mb-1">synonyms of "' + name + '"</div>'
@@ -657,7 +657,7 @@ async function loadFavData(favorites) {
   const needFit = newFavs.filter(d => fitCache[d.id] == null)
   if (needFit.length && fitContext) {
     try {
-      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey, undefined, loadSetting('scoringModel'))
+      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey, undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
       for (const d of needFit) {
         if (scores[d.domain] !== undefined) {
           const s = scores[d.domain]
@@ -674,7 +674,7 @@ async function loadFavData(favorites) {
   const needAssoc = newFavs.filter(d => assocCache[d.id] == null)
   if (needAssoc.length) {
     try {
-      const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'))
+      const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
       for (const d of needAssoc) {
         if (assocs[d.domain]) {
           assocCache[d.id] = assocs[d.domain]
@@ -721,7 +721,7 @@ async function refreshAssociations() {
   const aiKey = loadSetting('aiApiKey') || undefined
   const assocPrompt = getAssocPrompt()
   try {
-    const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'))
+    const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
     const updated = Object.keys(assocs).length
     if (!updated) throw new Error('AI returned no associations — check API key or prompt')
     for (const d of favorites) {
@@ -782,7 +782,7 @@ async function rescoreFit() {
   const aiKey = loadSetting('aiApiKey') || undefined
   const fitPrompt = document.getElementById('fitPromptBox')?.value || loadSetting('fitPrompt') || undefined
   try {
-    const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'))
+    const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
     for (const d of favorites) {
       if (scores[d.domain] !== undefined) {
         const s = scores[d.domain]
@@ -1021,7 +1021,7 @@ async function startSearch() {
     document.getElementById('statusMsg').textContent = 'Generating domain name ideas...'
     let names
     try {
-      names = await generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60)
+      names = await generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
     } catch (e) {
       document.getElementById('statusMsg').textContent = 'Error: ' + e.message
       searchDone()
@@ -1412,6 +1412,7 @@ const MODEL_OPTIONS = {
     { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (default)' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (cheapest)' },
   ],
   'OpenAI': [
     { id: 'gpt-4o', label: 'GPT-4o (default)' },
@@ -1449,10 +1450,11 @@ function populateModelDropdowns() {
     }
     if (saved !== chosen) saveSetting(settingKey, chosen)
   }
+  updatePresetAvailability()
 }
 
-function onCreativeModelChange(val) { saveSetting('creativeModel', val) }
-function onScoringModelChange(val) { saveSetting('scoringModel', val) }
+function onCreativeModelChange(val) { saveSetting('creativeModel', val); updatePresetAvailability() }
+function onScoringModelChange(val) { saveSetting('scoringModel', val); updatePresetAvailability() }
 function onBatchSizeInput(val) {
   const n = parseInt(val, 10)
   const clamped = isNaN(n) ? 60 : Math.min(200, Math.max(10, n))
@@ -1463,6 +1465,208 @@ function loadBatchSize() {
   const v = loadSetting('batchSize')
   if (v != null) document.getElementById('batchSize').value = v
 }
+
+// --- Thinking presets ---
+const THINKING_MODELS = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6']
+const PRESET_BADGES = { off: '🟢', balanced: '🟡', max: '🔴' }
+
+function labelForModel(id) {
+  for (const opts of Object.values(MODEL_OPTIONS)) {
+    const found = opts.find(o => o.id === id)
+    if (found) return found.label
+  }
+  return id || 'This model'
+}
+
+function updateCostBadge(slot) {
+  const badge = document.getElementById(slot + 'CostBadge')
+  if (!badge) return
+  const preset = loadSetting(slot + 'Preset') || 'off'
+  badge.textContent = PRESET_BADGES[preset] || '🟢'
+}
+
+function updatePresetAvailability() {
+  for (const slot of ['creative', 'scoring']) {
+    const model = loadSetting(slot + 'Model')
+    const presetSel = document.getElementById(slot + 'Preset')
+    if (!presetSel) continue
+    const supportsThinking = THINKING_MODELS.includes(model)
+    Array.from(presetSel.options).forEach(opt => {
+      if (opt.value !== 'off') opt.disabled = !supportsThinking
+    })
+    if (!supportsThinking && (loadSetting(slot + 'Preset') || 'off') !== 'off') {
+      saveSetting(slot + 'Preset', 'off')
+      presetSel.value = 'off'
+      toast(labelForModel(model) + " doesn't support extended thinking — preset reset to Off.")
+    }
+    updateCostBadge(slot)
+  }
+}
+
+function onCreativePresetChange(val) {
+  saveSetting('creativePreset', val)
+  updateCostBadge('creative')
+}
+
+function onScoringPresetChange(val) {
+  saveSetting('scoringPreset', val)
+  updateCostBadge('scoring')
+}
+
+function loadPresets() {
+  for (const slot of ['creative', 'scoring']) {
+    if (loadSetting(slot + 'Preset') == null) saveSetting(slot + 'Preset', 'off')
+    const sel = document.getElementById(slot + 'Preset')
+    if (sel) sel.value = loadSetting(slot + 'Preset') || 'off'
+  }
+}
+
+function toast(msg) {
+  const el = document.createElement('div')
+  el.textContent = msg
+  el.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-gray-900 text-white text-sm rounded-lg shadow-lg'
+  document.body.appendChild(el)
+  setTimeout(() => el.remove(), 3000)
+}
+
+// --- Saved library: ideas + prompts ---
+function populateIdeaPicker() {
+  const sel = document.getElementById('ideaPicker')
+  if (!sel) return
+  const current = sel.value
+  const items = (lib && lib.ideas && typeof lib.ideas.list === 'function') ? lib.ideas.list() : []
+  sel.innerHTML = '<option value="">— Choose saved idea —</option>'
+  for (const it of items) {
+    const opt = document.createElement('option')
+    opt.value = it.id
+    opt.textContent = it.name
+    sel.appendChild(opt)
+  }
+  if (current && items.some(it => it.id === current)) sel.value = current
+}
+
+function onIdeaPicked() {
+  const sel = document.getElementById('ideaPicker')
+  const id = sel.value
+  if (!id) return
+  const item = lib.ideas.get(id)
+  if (!item) return
+  const ta = document.getElementById('description')
+  ta.value = item.text || ''
+  onDescriptionInput()
+}
+
+function onIdeaSave() {
+  const text = document.getElementById('description').value
+  const name = prompt('Name this idea:')
+  if (!name) return
+  const created = lib.ideas.create(name, text)
+  populateIdeaPicker()
+  if (created?.id) document.getElementById('ideaPicker').value = created.id
+}
+
+function onIdeaUpdate() {
+  const id = document.getElementById('ideaPicker').value
+  if (!id) { toast('No saved idea selected'); return }
+  lib.ideas.update(id, { text: document.getElementById('description').value })
+  toast('Idea updated')
+}
+
+function onIdeaDelete() {
+  const sel = document.getElementById('ideaPicker')
+  const id = sel.value
+  if (!id) { toast('No saved idea selected'); return }
+  const item = lib.ideas.get(id)
+  if (!confirm('Delete saved idea "' + (item?.name || id) + '"?')) return
+  lib.ideas.delete(id)
+  populateIdeaPicker()
+  sel.value = ''
+}
+
+const PROMPT_KIND_CONFIG = {
+  generation: { pickerId: 'generationPromptPicker', textareaId: 'promptBox' },
+  scoring:    { pickerId: 'scoringPromptPicker',    textareaId: 'fitPromptBox' },
+  synonym:    { pickerId: 'synonymPromptPicker',    textareaId: 'synonymsPromptBox' },
+  association:{ pickerId: 'associationPromptPicker', textareaId: 'assocPromptBox' },
+}
+
+function populatePromptPicker(kind) {
+  const cfg = PROMPT_KIND_CONFIG[kind]
+  const sel = document.getElementById(cfg.pickerId)
+  if (!sel) return
+  const current = sel.value
+  const items = (lib && lib.prompts && typeof lib.prompts.list === 'function') ? lib.prompts.list(kind) : []
+  sel.innerHTML = '<option value="">— Choose saved prompt —</option>'
+  for (const it of items) {
+    const opt = document.createElement('option')
+    opt.value = it.id
+    opt.textContent = it.name + (it.isBuiltin ? ' (built-in)' : '')
+    sel.appendChild(opt)
+  }
+  if (current && items.some(it => it.id === current)) sel.value = current
+}
+
+function _promptPickedHandler(kind) {
+  const cfg = PROMPT_KIND_CONFIG[kind]
+  const id = document.getElementById(cfg.pickerId).value
+  if (!id) return
+  const item = lib.prompts.get(kind, id)
+  if (!item) return
+  const ta = document.getElementById(cfg.textareaId)
+  ta.value = item.text || ''
+  ta.dispatchEvent(new Event('input'))
+}
+
+function _promptSaveHandler(kind) {
+  const cfg = PROMPT_KIND_CONFIG[kind]
+  const text = document.getElementById(cfg.textareaId).value
+  const name = prompt('Name this ' + kind + ' prompt:')
+  if (!name) return
+  const created = lib.prompts.create(kind, name, text)
+  populatePromptPicker(kind)
+  if (created?.id) document.getElementById(cfg.pickerId).value = created.id
+}
+
+function _promptUpdateHandler(kind) {
+  const cfg = PROMPT_KIND_CONFIG[kind]
+  const id = document.getElementById(cfg.pickerId).value
+  if (!id) { toast('No saved prompt selected'); return }
+  lib.prompts.update(kind, id, { text: document.getElementById(cfg.textareaId).value })
+  toast('Prompt updated')
+}
+
+function _promptDeleteHandler(kind) {
+  const cfg = PROMPT_KIND_CONFIG[kind]
+  const sel = document.getElementById(cfg.pickerId)
+  const id = sel.value
+  if (!id) { toast('No saved prompt selected'); return }
+  const item = lib.prompts.get(kind, id)
+  if (item?.isBuiltin) { toast('Built-in prompts cannot be deleted'); return }
+  if (!confirm('Delete saved prompt "' + (item?.name || id) + '"?')) return
+  lib.prompts.delete(kind, id)
+  populatePromptPicker(kind)
+  sel.value = ''
+}
+
+function onGenerationPromptPicked() { _promptPickedHandler('generation') }
+function onGenerationPromptSave()    { _promptSaveHandler('generation') }
+function onGenerationPromptUpdate()  { _promptUpdateHandler('generation') }
+function onGenerationPromptDelete()  { _promptDeleteHandler('generation') }
+
+function onScoringPromptPicked() { _promptPickedHandler('scoring') }
+function onScoringPromptSave()    { _promptSaveHandler('scoring') }
+function onScoringPromptUpdate()  { _promptUpdateHandler('scoring') }
+function onScoringPromptDelete()  { _promptDeleteHandler('scoring') }
+
+function onSynonymPromptPicked() { _promptPickedHandler('synonym') }
+function onSynonymPromptSave()    { _promptSaveHandler('synonym') }
+function onSynonymPromptUpdate()  { _promptUpdateHandler('synonym') }
+function onSynonymPromptDelete()  { _promptDeleteHandler('synonym') }
+
+function onAssociationPromptPicked() { _promptPickedHandler('association') }
+function onAssociationPromptSave()    { _promptSaveHandler('association') }
+function onAssociationPromptUpdate()  { _promptUpdateHandler('association') }
+function onAssociationPromptDelete()  { _promptDeleteHandler('association') }
 
 // --- Init ---
 async function init() {
@@ -1479,7 +1683,13 @@ async function init() {
   loadFitContext()
   loadDescription()
   loadBatchSize()
+  loadPresets()
   populateModelDropdowns()
+  populateIdeaPicker()
+  populatePromptPicker('generation')
+  populatePromptPicker('scoring')
+  populatePromptPicker('synonym')
+  populatePromptPicker('association')
   loadSaved()
   checkActiveSearch()
 
@@ -1534,10 +1744,32 @@ Object.assign(window, {
   onDescriptionInput,
   onCreativeModelChange,
   onScoringModelChange,
+  onCreativePresetChange,
+  onScoringPresetChange,
   onBatchSizeInput,
   saveWeights,
   renderScores,
   dismissResume,
   resumeSearch,
   toggleMenu,
+  onIdeaPicked,
+  onIdeaSave,
+  onIdeaUpdate,
+  onIdeaDelete,
+  onGenerationPromptPicked,
+  onGenerationPromptSave,
+  onGenerationPromptUpdate,
+  onGenerationPromptDelete,
+  onScoringPromptPicked,
+  onScoringPromptSave,
+  onScoringPromptUpdate,
+  onScoringPromptDelete,
+  onSynonymPromptPicked,
+  onSynonymPromptSave,
+  onSynonymPromptUpdate,
+  onSynonymPromptDelete,
+  onAssociationPromptPicked,
+  onAssociationPromptSave,
+  onAssociationPromptUpdate,
+  onAssociationPromptDelete,
 })
