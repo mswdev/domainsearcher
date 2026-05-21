@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=27'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=27'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=27'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=28'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=28'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=28'
 
 // Active search controller
 let _abortController = null
@@ -1362,7 +1362,7 @@ function _slotForKey(key) {
 function _slotForModel(modelId) {
   if (!modelId) return 'groqKey'
   if (modelId.startsWith('claude-')) return 'anthropicKey'
-  if (modelId.startsWith('gpt-')) return 'openaiKey'
+  if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'openaiKey'
   return 'groqKey'
 }
 
@@ -1472,24 +1472,34 @@ function loadAiKey() {
 }
 
 // --- Model dropdowns ---
+// Labels include pricing (per 1M input/output tokens) + role hints.
+// Costs change occasionally; verify against official pricing pages if it matters.
 const MODEL_OPTIONS = {
   'Claude (Anthropic)': [
-    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (default)' },
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 (cheapest)' },
+    { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7 — $5 / $25 per 1M (frontier, default)' },
+    { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6 — $5 / $25 per 1M (one-behind frontier)' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — $3 / $15 per 1M (best balance)' },
+    { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5 — $1 / $5 per 1M (cheapest, no thinking)' },
   ],
   'OpenAI': [
-    { id: 'gpt-4o', label: 'GPT-4o (default)' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
+    { id: 'gpt-5.4',           label: 'GPT-5.4 — $2.50 / $15 per 1M (frontier, default)' },
+    { id: 'gpt-5.5',           label: 'GPT-5.5 — $5 / $30 per 1M (newest frontier)' },
+    { id: 'gpt-5.4-mini',      label: 'GPT-5.4 mini — $0.75 / $4.50 per 1M (cheap with thinking)' },
+    { id: 'gpt-5.4-nano',      label: 'GPT-5.4 nano — $0.20 / $1.25 per 1M (cheapest with thinking)' },
+    { id: 'gpt-5',             label: 'GPT-5 — $1.25 / $10 per 1M (one-behind frontier)' },
+    { id: 'gpt-5-mini',        label: 'GPT-5 mini — $0.25 / $2 per 1M (cheap reasoning)' },
+    { id: 'gpt-5-nano',        label: 'GPT-5 nano — $0.05 / $0.40 per 1M (cheapest, no thinking)' },
+    { id: 'o4-mini',           label: 'o4-mini — $1.10 / $4.40 per 1M (always thinks)' },
+    { id: 'gpt-4o',            label: 'GPT-4o — $2.50 / $10 per 1M (legacy chat)' },
+    { id: 'gpt-4o-mini',       label: 'GPT-4o mini — $0.15 / $0.60 per 1M (legacy chat)' },
   ],
   'Groq (default)': [
-    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (default)' },
-    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B — $0.59 / $0.79 per 1M (default, free fallback)' },
+    { id: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B — $0.05 / $0.08 per 1M (cheapest tier)' },
   ],
   'Groq': [
-    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (default)' },
-    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B — $0.59 / $0.79 per 1M (default)' },
+    { id: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B — $0.05 / $0.08 per 1M (cheapest tier)' },
   ],
 }
 
@@ -1550,7 +1560,12 @@ function loadBatchSize() {
 }
 
 // --- Thinking presets ---
-const THINKING_MODELS = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6']
+const THINKING_MODELS = [
+  'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6',
+  'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
+  'gpt-5', 'gpt-5-mini',
+  'o4-mini',
+]
 const PRESET_BADGE_CONFIG = {
   off:      { color: 'bg-green-500',  label: 'Off', title: 'No thinking. Cheapest.' },
   balanced: { color: 'bg-yellow-500', label: 'Bal', title: 'Adaptive thinking, medium effort. ~5-10x cost.' },
@@ -1782,16 +1797,31 @@ let _loopStatusTimer = null
 let _loopBackoffMultiplier = 1
 let _loopTotalCost = 0
 
-// Per-million-token pricing (USD). cc/cr only meaningful on Anthropic.
+// Per-million-token pricing (USD). cc = cache_creation (Anthropic only), cr = cache_read.
+// For OpenAI reasoning models, reasoning tokens are already inside completion_tokens
+// and billed at the output rate, so no separate field.
 const PRICING = {
-  'claude-opus-4-7':           { in: 5,    out: 25,  cc: 6.25, cr: 0.50 },
-  'claude-opus-4-6':           { in: 5,    out: 25,  cc: 6.25, cr: 0.50 },
-  'claude-sonnet-4-6':         { in: 3,    out: 15,  cc: 3.75, cr: 0.30 },
-  'claude-haiku-4-5':          { in: 1,    out: 5,   cc: 1.25, cr: 0.10 },
-  'gpt-4o':                    { in: 2.5,  out: 10,  cc: 0,    cr: 1.25 },
-  'gpt-4o-mini':               { in: 0.15, out: 0.60,cc: 0,    cr: 0.075 },
-  'llama-3.3-70b-versatile':   { in: 0.59, out: 0.79,cc: 0,    cr: 0 },
-  'llama-3.1-8b-instant':      { in: 0.05, out: 0.08,cc: 0,    cr: 0 },
+  // Anthropic
+  'claude-opus-4-7':           { in: 5,    out: 25,   cc: 6.25, cr: 0.50  },
+  'claude-opus-4-6':           { in: 5,    out: 25,   cc: 6.25, cr: 0.50  },
+  'claude-sonnet-4-6':         { in: 3,    out: 15,   cc: 3.75, cr: 0.30  },
+  'claude-haiku-4-5':          { in: 1,    out: 5,    cc: 1.25, cr: 0.10  },
+  // OpenAI GPT-5 family
+  'gpt-5.5':                   { in: 5,    out: 30,   cc: 0,    cr: 0.50  },
+  'gpt-5.4':                   { in: 2.50, out: 15,   cc: 0,    cr: 0.25  },
+  'gpt-5.4-mini':              { in: 0.75, out: 4.50, cc: 0,    cr: 0.075 },
+  'gpt-5.4-nano':              { in: 0.20, out: 1.25, cc: 0,    cr: 0.02  },
+  'gpt-5':                     { in: 1.25, out: 10,   cc: 0,    cr: 0.125 },
+  'gpt-5-mini':                { in: 0.25, out: 2,    cc: 0,    cr: 0.025 },
+  'gpt-5-nano':                { in: 0.05, out: 0.40, cc: 0,    cr: 0.005 },
+  // OpenAI o-series
+  'o4-mini':                   { in: 1.10, out: 4.40, cc: 0,    cr: 0.275 },
+  // OpenAI legacy
+  'gpt-4o':                    { in: 2.50, out: 10,   cc: 0,    cr: 1.25  },
+  'gpt-4o-mini':               { in: 0.15, out: 0.60, cc: 0,    cr: 0.075 },
+  // Groq
+  'llama-3.3-70b-versatile':   { in: 0.59, out: 0.79, cc: 0,    cr: 0     },
+  'llama-3.1-8b-instant':      { in: 0.05, out: 0.08, cc: 0,    cr: 0     },
 }
 
 function estimateCost(usage, model) {

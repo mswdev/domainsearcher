@@ -84,8 +84,44 @@ function buildAnthropicBody(model, preset, system, userMsgs) {
 export function providerForModel(model) {
   if (!model) return 'groq'
   if (model.startsWith('claude-')) return 'anthropic'
-  if (model.startsWith('gpt-')) return 'openai'
+  if (model.startsWith('gpt-') || /^o\d/.test(model)) return 'openai'
   return 'groq'
+}
+
+// OpenAI reasoning-capable models — exposed in the UI for Balanced/Max presets.
+// gpt-5-nano is GPT-5 era but has no reasoning. gpt-4o family is legacy chat.
+function _isOpenAIReasoningModel(model) {
+  if (!model) return false
+  if (model.startsWith('gpt-5') && !model.includes('nano')) return true
+  if (/^o\d/.test(model)) return true
+  return false
+}
+
+function buildOpenAIBody(model, preset, messages) {
+  if (!_isOpenAIReasoningModel(model)) {
+    // Legacy chat (gpt-4o, gpt-4o-mini) or non-reasoning gpt-5-nano: classic shape
+    return { model, messages, max_tokens: 2048 }
+  }
+  // Reasoning model: max_completion_tokens covers BOTH reasoning + visible output
+  // combined (per OpenAI docs), and max_tokens is a 400 error. Effort param
+  // values are model-family-specific.
+  const body = { model, messages }
+  const is54_55 = model.startsWith('gpt-5.4') || model.startsWith('gpt-5.5')
+  if (preset === 'off') {
+    if (is54_55) body.reasoning_effort = 'none'
+    else if (model.startsWith('gpt-5')) body.reasoning_effort = 'minimal'
+    else body.reasoning_effort = 'low' // o-series has no off; "low" is the floor
+    body.max_completion_tokens = 4096
+  } else if (preset === 'balanced') {
+    body.reasoning_effort = 'medium'
+    body.max_completion_tokens = 16384
+  } else if (preset === 'max') {
+    body.reasoning_effort = is54_55 ? 'xhigh' : 'high'
+    body.max_completion_tokens = 32768
+  } else {
+    body.max_completion_tokens = 4096
+  }
+  return body
 }
 
 async function aiChat(messages, apiKey, model, preset = 'off', signal) {
@@ -99,9 +135,10 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal) {
   const key = apiKey || (route === 'groq' ? BUNDLED_API_KEY : undefined)
   if (!key) throw new AIAPIError(401, 'No API key set for provider: ' + route)
 
-  if (preset !== 'off' && (route !== 'anthropic' || resolvedModel.includes('haiku'))) {
-    preset = 'off'
-  }
+  const presetSupported =
+    (route === 'anthropic' && !resolvedModel.includes('haiku')) ||
+    (route === 'openai' && _isOpenAIReasoningModel(resolvedModel))
+  if (preset !== 'off' && !presetSupported) preset = 'off'
 
   if (route === 'anthropic') {
     const system = messages.find(m => m.role === 'system')?.content
@@ -137,13 +174,16 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal) {
     ? 'https://api.openai.com/v1'
     : BUNDLED_BASE_URL
 
+  const body = route === 'openai'
+    ? buildOpenAIBody(resolvedModel, preset, messages)
+    : { model: resolvedModel, messages, max_tokens: 2048 } // Groq: no reasoning models supported
   const res = await fetch(baseUrl + '/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + key,
     },
-    body: JSON.stringify({ model: resolvedModel, messages, max_tokens: 2048 }),
+    body: JSON.stringify(body),
     signal,
   })
   if (!res.ok) {
