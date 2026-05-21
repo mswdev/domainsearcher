@@ -259,9 +259,6 @@ async function checkOne() {
   resultDiv.classList.remove('hidden')
   resultDiv.innerHTML = '<span class="text-gray-400 text-sm">Checking ' + name + (zones.length > 1 ? ' across ' + zones.length + ' zones' : '.' + zones[0]) + '...</span>'
 
-  if (typeof gtag !== 'undefined') gtag('event', 'quick_check', { domain_stem: name })
-  if (window.__tracker) window.__tracker.event('quick_check', { domain_stem: name })
-
   // Check the original name
   let html = ''
   for (const zone of zones) {
@@ -794,8 +791,6 @@ async function rescoreFit() {
       }
     }
     renderScores(favorites)
-    if (typeof gtag !== 'undefined') gtag('event', 'fit_scored')
-    if (window.__tracker) window.__tracker.event('fit_scored')
   } catch (e) {
     console.error('AI re-score failed', e)
   }
@@ -915,8 +910,6 @@ async function promptSaveFavs() {
   const set = db.createSet(name, fitContext || null)
   if (!set) { alert('No favorites to save'); return }
   loadSets()
-  if (typeof gtag !== 'undefined') gtag('event', 'favorite_saved')
-  if (window.__tracker) window.__tracker.event('favorite_saved')
 }
 
 // Generic section collapse — works for any section with {name}Body and {name}CollapseIcon elements
@@ -1024,9 +1017,6 @@ async function startSearch() {
   saveSetting('activeSearch', activeSearch)
   document.getElementById('resumeBanner').classList.add('hidden')
 
-  if (typeof gtag !== 'undefined') gtag('event', 'search_started', { zones: zones.join(',') })
-  if (window.__tracker) window.__tracker.event('search_started', { zones: zones.join(',') })
-
   try {
     document.getElementById('statusMsg').textContent = 'Generating domain name ideas...'
     let names
@@ -1047,22 +1037,24 @@ async function startSearch() {
     const total = names.length * zones.length
     document.getElementById('statusMsg').textContent = 'Checking availability of ' + total + ' domains across ' + zones.length + ' zone' + (zones.length > 1 ? 's' : '') + '...'
 
-    let idx = 0
-    for (const name of names) {
-      if (signal.aborted) break
-      for (const zone of zones) {
-        if (signal.aborted) break
+    const tasks = names.flatMap(name => zones.map(zone => name + '.' + zone))
+    let nextIdx = 0
+    let completed = 0
+    const CONCURRENCY = 6
 
-        const domain = name + '.' + zone
-        document.getElementById('statusMsg').textContent = 'Checking ' + domain + '... (' + (idx + 1) + '/' + total + ')'
+    const worker = async () => {
+      while (true) {
+        if (signal.aborted) return
+        const taskIdx = nextIdx++
+        if (taskIdx >= tasks.length) return
+        const domain = tasks[taskIdx]
+
+        document.getElementById('statusMsg').textContent = 'Checking ' + domain + '... (' + (completed + 1) + '/' + total + ')'
 
         const available = await checkDomainAvailable(domain, signal)
-        if (signal.aborted) break
+        if (signal.aborted) return
 
         const record = db.upsert(domain, { domain, available, description: desc }, { available, description: desc })
-
-        if (typeof gtag !== 'undefined' && available === true) gtag('event', 'domain_available', { domain })
-        if (window.__tracker && available === true) window.__tracker.event('domain_available', { domain })
 
         // Append to history
         const historySection = document.getElementById('historySection')
@@ -1086,9 +1078,13 @@ async function startSearch() {
           sc.textContent = parseInt(sc.textContent || '0') + 1
         }
 
-        idx++
+        completed++
       }
     }
+
+    const workers = []
+    for (let w = 0; w < Math.min(CONCURRENCY, tasks.length); w++) workers.push(worker())
+    await Promise.all(workers)
   } catch (e) {
     if (!signal.aborted) {
       document.getElementById('statusMsg').textContent = 'Error: ' + e.message

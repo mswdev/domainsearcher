@@ -1,3 +1,34 @@
+function extractJson(text) {
+  if (!text) return null
+  let s = text.trim()
+  const fenced = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/i)
+  if (fenced) s = fenced[1].trim()
+  try { return JSON.parse(s) } catch {}
+  const startIdx = s.search(/[\{\[]/)
+  if (startIdx === -1) return null
+  const open = s[startIdx]
+  const close = open === '{' ? '}' : ']'
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = startIdx; i < s.length; i++) {
+    const c = s[i]
+    if (esc) { esc = false; continue }
+    if (c === '\\') { esc = true; continue }
+    if (c === '"') { inStr = !inStr; continue }
+    if (inStr) continue
+    if (c === open) depth++
+    else if (c === close) {
+      depth--
+      if (depth === 0) {
+        const slice = s.slice(startIdx, i + 1)
+        try { return JSON.parse(slice) } catch { return null }
+      }
+    }
+  }
+  return null
+}
+
 // Bundled API key — XOR-encoded at build time so GitHub secret scanning won't flag it
 // deploy.yml encodes: each char XOR 42, joined by commas → decoded here at runtime
 function _dk(s) { return s.split(',').map(c => String.fromCharCode(parseInt(c) ^ 42)).join('') }
@@ -97,12 +128,10 @@ export async function generateDomainNames(description, systemPrompt, apiKey) {
 
   if (!text) throw new Error('Empty response from AI')
 
-  const jsonMatch = text.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) throw new Error('Could not parse AI response as JSON array')
-
-  const names = JSON.parse(jsonMatch[0])
+  const names = extractJson(text)
+  if (!Array.isArray(names)) throw new Error('Could not parse AI response as JSON array')
   return names
-    .map(n => n.toLowerCase().replace(/[^a-z0-9]/g, ''))
+    .map(n => String(n).toLowerCase().replace(/[^a-z0-9]/g, ''))
     .filter(n => n.length >= 2)
 }
 
@@ -126,24 +155,19 @@ export async function scoreFitBatch(domains, context, apiKey, fitPrompt) {
     { role: 'user', content: domains.join('\n') },
   ], apiKey)
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return {}
-  try {
-    const raw = JSON.parse(jsonMatch[0])
-    const result = {}
-    const clamp = v => Math.min(10, Math.max(0, Math.round(Number(v ?? 5))))
-    for (const [domain, val] of Object.entries(raw)) {
-      if (val !== null && typeof val === 'object') {
-        result[domain] = { fit: clamp(val.fit), pro: clamp(val.pro), mem: clamp(val.mem), brd: clamp(val.brd) }
-      } else {
-        // Legacy format: just a FIT number
-        result[domain] = { fit: clamp(val), pro: null, mem: null, brd: null }
-      }
+  const raw = extractJson(text)
+  if (!raw || typeof raw !== 'object') return {}
+  const result = {}
+  const clamp = v => Math.min(10, Math.max(0, Math.round(Number(v ?? 5))))
+  for (const [domain, val] of Object.entries(raw)) {
+    if (val !== null && typeof val === 'object') {
+      result[domain] = { fit: clamp(val.fit), pro: clamp(val.pro), mem: clamp(val.mem), brd: clamp(val.brd) }
+    } else {
+      // Legacy format: just a FIT number
+      result[domain] = { fit: clamp(val), pro: null, mem: null, brd: null }
     }
-    return result
-  } catch {
-    return {}
   }
+  return result
 }
 
 export const DEFAULT_ASSOC_PROMPT = `For each domain, write exactly 5 word-associations (3-5 words each, lowercase, no punctuation).
@@ -164,12 +188,9 @@ export async function generateSynonyms(stem, apiKey, systemPrompt) {
     { role: 'system', content: systemPrompt || DEFAULT_SYNONYM_PROMPT },
     { role: 'user', content: stem },
   ], apiKey)
-  const match = text.match(/\[[\s\S]*?\]/)
-  if (!match) return []
-  try {
-    const arr = JSON.parse(match[0])
-    return arr.filter(w => typeof w === 'string' && /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(w)).slice(0, 6)
-  } catch { return [] }
+  const arr = extractJson(text)
+  if (!Array.isArray(arr)) return []
+  return arr.filter(w => typeof w === 'string' && /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(w)).slice(0, 6)
 }
 
 const TLD_MEANINGS = {
@@ -203,20 +224,14 @@ export async function associateDomains(domains, apiKey, systemPrompt) {
     { role: 'user', content: annotated.join('\n') },
   ], apiKey)
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return {}
-
-  try {
-    const assocs = JSON.parse(jsonMatch[0])
-    // Map back to full domain strings
-    const result = {}
-    for (const domain of domains) {
-      const stem = domain.replace(/\.[a-z]+$/, '')
-      const raw = assocs[stem]
-      if (raw) result[domain] = Array.isArray(raw) ? raw : [raw]
-    }
-    return result
-  } catch {
-    return {}
+  const assocs = extractJson(text)
+  if (!assocs || typeof assocs !== 'object') return {}
+  // Map back to full domain strings
+  const result = {}
+  for (const domain of domains) {
+    const stem = domain.replace(/\.[a-z]+$/, '')
+    const raw = assocs[stem]
+    if (raw) result[domain] = Array.isArray(raw) ? raw : [raw]
   }
+  return result
 }
