@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=15'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=15'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=15'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=21'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=21'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=21'
 
 // Active search controller
 let _abortController = null
