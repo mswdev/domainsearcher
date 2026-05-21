@@ -79,16 +79,25 @@ function buildAnthropicBody(model, preset, system, userMsgs) {
   return { ...base, max_tokens: 4096 }
 }
 
-async function aiChat(messages, apiKey, model, preset = 'off') {
-  const key = apiKey || BUNDLED_API_KEY
-  const provider = detectProvider(key)
-  const resolvedAnthropicModel = model || 'claude-opus-4-6'
+// Route by model prefix, not key prefix. Once users can save multiple keys,
+// the same key prefix may not match the model they actually want to call.
+export function providerForModel(model) {
+  if (!model) return 'groq'
+  if (model.startsWith('claude-')) return 'anthropic'
+  if (model.startsWith('gpt-')) return 'openai'
+  return 'groq'
+}
 
-  if (preset !== 'off' && (provider !== 'Claude (Anthropic)' || resolvedAnthropicModel.includes('haiku'))) {
+async function aiChat(messages, apiKey, model, preset = 'off') {
+  const route = providerForModel(model)
+  const key = apiKey || (route === 'groq' ? BUNDLED_API_KEY : undefined)
+  if (!key) throw new AIAPIError(401, 'No API key set for provider: ' + route)
+
+  if (preset !== 'off' && (route !== 'anthropic' || (model || '').includes('haiku'))) {
     preset = 'off'
   }
 
-  if (provider === 'Claude (Anthropic)') {
+  if (route === 'anthropic') {
     const system = messages.find(m => m.role === 'system')?.content
     const userMsgs = messages.filter(m => m.role !== 'system')
     const body = buildAnthropicBody(resolvedAnthropicModel, preset, system, userMsgs)
@@ -116,11 +125,11 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
     return textBlock.text
   }
 
-  // OpenAI-compatible (Groq or OpenAI)
-  const baseUrl = provider === 'OpenAI'
+  // OpenAI-compatible (Groq or OpenAI), routed by model prefix
+  const baseUrl = route === 'openai'
     ? 'https://api.openai.com/v1'
     : BUNDLED_BASE_URL
-  const resolvedModel = model || (provider === 'OpenAI' ? 'gpt-4o-mini' : BUNDLED_MODEL)
+  const resolvedModel = model || (route === 'openai' ? 'gpt-4o-mini' : BUNDLED_MODEL)
 
   const res = await fetch(baseUrl + '/chat/completions', {
     method: 'POST',

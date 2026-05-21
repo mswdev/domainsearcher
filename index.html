@@ -251,12 +251,9 @@
           <!-- AI Key row -->
           <div class="mb-4 pb-4 border-b border-gray-100">
             <div class="flex items-center gap-2 flex-wrap">
-              <label class="text-xs font-medium text-gray-400 whitespace-nowrap">AI model</label>
-              <span id="aiProviderBadge" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200">
-                <span class="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block"></span>
-                <span id="aiProviderLabel">Groq</span>
-              </span>
-              <button id="addKeyBtn" onclick="toggleKeyInput()" class="text-xs text-gray-400 hover:text-cyan-600 border border-gray-200 hover:border-cyan-400 px-2.5 py-1 rounded-full transition-colors">+ add my key</button>
+              <label class="text-xs font-medium text-gray-400 whitespace-nowrap">Keys</label>
+              <span id="aiProviderBadges" class="inline-flex items-center gap-1.5 flex-wrap"></span>
+              <button id="addKeyBtn" onclick="toggleKeyInput()" class="text-xs text-gray-400 hover:text-cyan-600 border border-gray-200 hover:border-cyan-400 px-2.5 py-1 rounded-full transition-colors">+ add key</button>
               <span id="aiKeySaved" class="text-xs text-green-500 hidden">saved</span>
             </div>
             <div id="aiKeyRow" class="hidden mt-2 flex items-center gap-2 flex-wrap">
@@ -630,6 +627,6 @@
     </div>
   </footer>
 
-  <script type="module" src="js/app.js?v=24"></script>
+  <script type="module" src="js/app.js?v=25"></script>
 </body>
 </html>

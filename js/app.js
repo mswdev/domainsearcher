@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=21'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=21'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=21'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=25'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=25'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=25'
 
 // Active search controller
 let _abortController = null
@@ -274,10 +274,9 @@ async function checkOne() {
   // Synonyms
   if (synonymsOn) {
     resultDiv.innerHTML = html + '<div class="text-xs text-cyan-500 mt-2 mb-1">generating synonyms...</div>'
-    const aiKey = loadSetting('aiApiKey') || undefined
     const synonymPrompt = document.getElementById('synonymsPromptBox')?.value || loadSetting('synonymPrompt') || undefined
     let synonyms = []
-    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off'); trackCost(loadSetting('creativeModel')) } catch {}
+    try { synonyms = await generateSynonyms(name, getKeyForModel(loadSetting('creativeModel')), synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off'); trackCost(loadSetting('creativeModel')) } catch {}
 
     if (synonyms.length) {
       html += '<div class="text-xs text-cyan-500 font-medium mt-3 mb-1">synonyms of "' + name + '"</div>'
@@ -629,8 +628,6 @@ async function loadFavData(favorites) {
   if (!newFavs.length) return
   newFavs.forEach(d => _loadedFavIds.add(d.id))
 
-  const aiKey = loadSetting('aiApiKey') || undefined
-
   // Zones: only check zones missing from in-memory cache
   const needZonesFetch = []
   for (const d of newFavs) {
@@ -657,7 +654,7 @@ async function loadFavData(favorites) {
   const needFit = newFavs.filter(d => fitCache[d.id] == null)
   if (needFit.length && fitContext) {
     try {
-      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey, undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, getKeyForModel(loadSetting('scoringModel')), undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
       trackCost(loadSetting('scoringModel'))
       for (const d of needFit) {
         if (scores[d.domain] !== undefined) {
@@ -675,7 +672,7 @@ async function loadFavData(favorites) {
   const needAssoc = newFavs.filter(d => assocCache[d.id] == null)
   if (needAssoc.length) {
     try {
-      const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+      const assocs = await associateDomains(needAssoc.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
       trackCost(loadSetting('creativeModel'))
       for (const d of needAssoc) {
         if (assocs[d.domain]) {
@@ -720,10 +717,9 @@ async function refreshAssociations() {
   if (!favorites?.length) return
   const btn = document.querySelector('button[onclick="refreshAssociations()"]')
   if (btn) { btn.textContent = '⏳'; btn.style.opacity = '1'; btn.disabled = true }
-  const aiKey = loadSetting('aiApiKey') || undefined
   const assocPrompt = getAssocPrompt()
   try {
-    const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+    const assocs = await associateDomains(favorites.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
     trackCost(loadSetting('creativeModel'))
     const updated = Object.keys(assocs).length
     if (!updated) throw new Error('AI returned no associations — check API key or prompt')
@@ -782,13 +778,12 @@ async function rescoreFit() {
   fitCache = {}
   renderScores(favorites)
 
-  const aiKey = loadSetting('aiApiKey') || undefined
   const fitPrompt = document.getElementById('fitPromptBox')?.value || loadSetting('fitPrompt') || undefined
   try {
     const scores = await withElapsedStatus(
       document.getElementById('statusMsg'),
       'Re-scoring favorites...',
-      () => scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+      () => scoreFitBatch(favorites.map(d => d.domain), context, getKeyForModel(loadSetting('scoringModel')), fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
     )
     trackCost(loadSetting('scoringModel'))
     for (const d of favorites) {
@@ -1018,7 +1013,6 @@ async function startSearch() {
 
   const zones = getSelectedZones()
   const customPrompt = document.getElementById('promptBox').value.trim()
-  const aiKey = loadSetting('aiApiKey') || undefined
 
   // Save active search state for resume
   const activeSearch = { description: desc, zones, prompt: customPrompt || '' }
@@ -1031,7 +1025,7 @@ async function startSearch() {
       names = await withElapsedStatus(
         document.getElementById('statusMsg'),
         'Generating domain name ideas...',
-        () => generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
+        () => generateDomainNames(desc, customPrompt || undefined, getKeyForModel(loadSetting('creativeModel')), loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
       )
       trackCost(loadSetting('creativeModel'))
     } catch (e) {
@@ -1353,24 +1347,66 @@ function resumeSearch() {
 
 let _savedAiKey = ''
 
-function _updateProviderBadge(key) {
-  const label = document.getElementById('aiProviderLabel')
-  const badge = document.getElementById('aiProviderBadge')
-  const addBtn = document.getElementById('addKeyBtn')
-  const hasCustomKey = key && key.length > 0
-  const providerName = hasCustomKey ? detectProvider(key) : 'Groq'
-  label.textContent = providerName
-  if (hasCustomKey) {
-    badge.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-50 text-cyan-700 border border-cyan-200'
-    badge.querySelector('span').className = 'w-1.5 h-1.5 rounded-full bg-cyan-400 inline-block'
-    addBtn.textContent = '✓ my key'
-    addBtn.className = 'text-xs text-cyan-600 border border-cyan-300 px-2.5 py-1 rounded-full'
+// Multi-key store: one slot per provider. Filled by saveAiKey() based on prefix.
+const KEY_SLOTS = ['anthropicKey', 'openaiKey', 'groqKey']
+const PROVIDER_LABELS = { anthropicKey: 'Anthropic', openaiKey: 'OpenAI', groqKey: 'Groq' }
+
+function _slotForKey(key) {
+  if (!key) return null
+  if (key.startsWith('sk-ant-')) return 'anthropicKey'
+  if (key.startsWith('gsk_')) return 'groqKey'
+  if (key.startsWith('sk-')) return 'openaiKey'
+  return null
+}
+
+function _slotForModel(modelId) {
+  if (!modelId) return 'groqKey'
+  if (modelId.startsWith('claude-')) return 'anthropicKey'
+  if (modelId.startsWith('gpt-')) return 'openaiKey'
+  return 'groqKey'
+}
+
+export function getKeyForModel(modelId) {
+  const slot = _slotForModel(modelId)
+  const key = loadSetting(slot)
+  if (key) return key
+  const legacy = loadSetting('aiApiKey')
+  if (legacy && _slotForKey(legacy) === slot) return legacy
+  return undefined
+}
+
+function _savedProviders() {
+  return KEY_SLOTS.filter(s => !!loadSetting(s))
+}
+
+function _updateProviderBadge(_key) {
+  const container = document.getElementById('aiProviderBadges')
+  if (!container) return
+  container.innerHTML = ''
+  const saved = _savedProviders()
+  if (saved.length === 0) {
+    const chip = document.createElement('span')
+    chip.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200'
+    chip.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block"></span> no keys saved — using bundled Groq'
+    container.appendChild(chip)
   } else {
-    badge.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200'
-    badge.querySelector('span').className = 'w-1.5 h-1.5 rounded-full bg-orange-400 inline-block'
-    addBtn.textContent = '+ add my key'
-    addBtn.className = 'text-xs text-gray-400 hover:text-cyan-600 border border-gray-200 hover:border-cyan-400 px-2.5 py-1 rounded-full transition-colors'
+    for (const slot of saved) {
+      const chip = document.createElement('span')
+      chip.className = 'inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-cyan-50 text-cyan-700 border border-cyan-200 cursor-pointer'
+      chip.title = 'Click to clear this key'
+      chip.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-cyan-400 inline-block"></span> ' + PROVIDER_LABELS[slot] + ' ✓'
+      chip.onclick = () => {
+        if (confirm('Clear saved ' + PROVIDER_LABELS[slot] + ' key?')) {
+          saveSetting(slot, '')
+          _updateProviderBadge()
+          populateModelDropdowns()
+        }
+      }
+      container.appendChild(chip)
+    }
   }
+  const addBtn = document.getElementById('addKeyBtn')
+  if (addBtn) addBtn.textContent = saved.length ? '+ add another' : '+ add key'
 }
 
 function toggleKeyInput() {
@@ -1386,36 +1422,42 @@ function onAiKeyInput(val) {
 }
 
 function saveAiKey() {
-  const key = document.getElementById('aiKeyInput').value
-  _savedAiKey = key
-  saveSetting('aiApiKey', key)
+  const key = document.getElementById('aiKeyInput').value.trim()
+  if (!key) return
+  const slot = _slotForKey(key)
+  if (!slot) {
+    alert('Unrecognized key format. Anthropic keys start with sk-ant-, OpenAI with sk-, Groq with gsk_.')
+    return
+  }
+  saveSetting(slot, key)
+  document.getElementById('aiKeyInput').value = ''
+  _savedAiKey = ''
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
-  _updateProviderBadge(key)
-  if (!key) document.getElementById('aiKeyRow').classList.add('hidden')
+  document.getElementById('aiKeyRow').classList.add('hidden')
+  _updateProviderBadge()
   populateModelDropdowns()
   const el = document.getElementById('aiKeySaved')
   el.classList.remove('hidden')
+  el.textContent = PROVIDER_LABELS[slot] + ' key saved'
   setTimeout(() => el.classList.add('hidden'), 2000)
 }
 
 function clearAiKey() {
   document.getElementById('aiKeyInput').value = ''
   _savedAiKey = ''
-  _updateProviderBadge('')
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
   document.getElementById('aiKeyRow').classList.add('hidden')
-  saveSetting('aiApiKey', '')
-  populateModelDropdowns()
 }
 
 function loadAiKey() {
-  const val = loadSetting('aiApiKey')
-  if (val) {
-    _savedAiKey = val
-    document.getElementById('aiKeyInput').value = val
-    document.getElementById('aiKeyRow').classList.remove('hidden')
+  // One-time migration: legacy aiApiKey → per-provider slot
+  const legacy = loadSetting('aiApiKey')
+  if (legacy) {
+    const slot = _slotForKey(legacy)
+    if (slot && !loadSetting(slot)) saveSetting(slot, legacy)
+    saveSetting('aiApiKey', '')
   }
-  _updateProviderBadge(val || '')
+  _updateProviderBadge()
 }
 
 // --- Model dropdowns ---
@@ -1441,11 +1483,18 @@ const MODEL_OPTIONS = {
 }
 
 function populateModelDropdowns() {
-  const key = loadSetting('aiApiKey') || ''
-  const provider = detectProvider(key)
-  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS['Groq (default)']
-  const defaultId = options[0].id
-  const validIds = options.map(o => o.id)
+  // Build available groups based on which provider keys are saved.
+  // Groq always available (bundled fallback key).
+  const saved = new Set(_savedProviders())
+  saved.add('groqKey')
+  const groups = []
+  if (saved.has('anthropicKey')) groups.push({ label: 'Anthropic', options: MODEL_OPTIONS['Claude (Anthropic)'] })
+  if (saved.has('openaiKey')) groups.push({ label: 'OpenAI', options: MODEL_OPTIONS['OpenAI'] })
+  if (saved.has('groqKey')) groups.push({ label: loadSetting('groqKey') ? 'Groq' : 'Groq (bundled)', options: MODEL_OPTIONS['Groq (default)'] })
+
+  const allOptions = groups.flatMap(g => g.options)
+  const validIds = allOptions.map(o => o.id)
+  const defaultId = (groups[0] && groups[0].options[0].id) || 'llama-3.3-70b-versatile'
 
   const slots = [
     ['creativeModel', 'creativeModel', null],
@@ -1456,15 +1505,20 @@ function populateModelDropdowns() {
   for (const [selectId, settingKey, fallbackKey] of slots) {
     const sel = document.getElementById(selectId)
     if (!sel) continue
-    const saved = loadSetting(settingKey) ?? (fallbackKey ? loadSetting(fallbackKey) : null)
-    const chosen = validIds.includes(saved) ? saved : defaultId
+    const stored = loadSetting(settingKey) ?? (fallbackKey ? loadSetting(fallbackKey) : null)
+    const chosen = validIds.includes(stored) ? stored : defaultId
     while (sel.firstChild) sel.removeChild(sel.firstChild)
-    for (const o of options) {
-      const opt = document.createElement('option')
-      opt.value = o.id
-      opt.textContent = o.label
-      if (o.id === chosen) opt.selected = true
-      sel.appendChild(opt)
+    for (const g of groups) {
+      const og = document.createElement('optgroup')
+      og.label = g.label
+      for (const o of g.options) {
+        const opt = document.createElement('option')
+        opt.value = o.id
+        opt.textContent = o.label
+        if (o.id === chosen) opt.selected = true
+        og.appendChild(opt)
+      }
+      sel.appendChild(og)
     }
     if (loadSetting(settingKey) !== chosen) saveSetting(settingKey, chosen)
   }
@@ -1872,8 +1926,9 @@ function onLoopActivePromptChange(val) { saveSetting('loopActivePrompt', val || 
 
 function onLoopToggle() {
   if (_loopActive) { stopLoop(); return }
-  const apiKey = loadSetting('aiApiKey')
-  if (!apiKey) { alert('Set an API key first'); return }
+  const loopModel = loadSetting('loopCreativeModel') || loadSetting('creativeModel')
+  const apiKey = getKeyForModel(loopModel)
+  if (!apiKey && _slotForModel(loopModel) !== 'groqKey') { alert('Set an API key for ' + PROVIDER_LABELS[_slotForModel(loopModel)] + ' first'); return }
   const creativePreset = loadSetting('loopCreativePreset') || 'off'
   const scoringPreset = loadSetting('loopScoringPreset') || 'off'
   const scoringEnabled = loadSetting('loopScoringEnabled') || false
@@ -1954,8 +2009,8 @@ async function loopTick() {
 }
 
 async function runOneLoopIteration() {
-  const apiKey = loadSetting('aiApiKey')
   const model = loadSetting('loopCreativeModel') || loadSetting('creativeModel')
+  const apiKey = getKeyForModel(model)
   const preset = loadSetting('loopCreativePreset') || 'off'
   const batchSize = loadSetting('batchSize') || 60
   const maxSeen = loadSetting('loopMaxSeenStems') || 200
@@ -2022,7 +2077,7 @@ async function runOneLoopIteration() {
     const scoringModel = loadSetting('loopScoringModel') || loadSetting('scoringModel')
     const scoringPreset = loadSetting('loopScoringPreset') || 'off'
     try {
-      const scores = await scoreFitBatch(available, idea, apiKey, null, scoringModel, scoringPreset)
+      const scores = await scoreFitBatch(available, idea, getKeyForModel(scoringModel), null, scoringModel, scoringPreset)
       iterationCost += estimateCost(getLastUsage(), scoringModel)
       for (const [domain, s] of Object.entries(scores || {})) {
         const rec = db.findUnique(domain)
