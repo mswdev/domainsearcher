@@ -88,7 +88,7 @@ export function providerForModel(model) {
   return 'groq'
 }
 
-async function aiChat(messages, apiKey, model, preset = 'off') {
+async function aiChat(messages, apiKey, model, preset = 'off', signal) {
   // Reset usage on every entry so a late-resolving orphan fetch (e.g. one we
   // raced past via withElapsedStatus) can't carry stale tokens into the next
   // trackCost() read.
@@ -116,6 +116,7 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(body),
+      signal,
     })
     if (!res.ok) {
       _lastUsage = null
@@ -143,6 +144,7 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
       'Authorization': 'Bearer ' + key,
     },
     body: JSON.stringify({ model: resolvedModel, messages, max_tokens: 2048 }),
+    signal,
   })
   if (!res.ok) {
     _lastUsage = null
@@ -192,12 +194,12 @@ Rules:
 
 Return ONLY a JSON array of {{count}} strings, no other text. Example: ["agentix","proxima","condukt","envoyai","meshkey","vaultly","humanapi","autoplex","agenthq","delegata"]`
 
-export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60, preset = 'off') {
+export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60, preset = 'off', signal) {
   const resolvedPrompt = (systemPrompt || DEFAULT_SYSTEM_PROMPT).replaceAll('{{count}}', String(batchSize))
   const text = await aiChat([
     { role: 'system', content: resolvedPrompt },
     { role: 'user', content: `Idea: ${description}` },
-  ], apiKey, model, preset)
+  ], apiKey, model, preset, signal)
 
   if (!text) throw new Error('Empty response from AI')
 
@@ -217,7 +219,7 @@ export const DEFAULT_FIT_PROMPT = `Score each domain name on four dimensions (0â
 Return ONLY a JSON object. Example:
 {"copygen.ai": {"fit": 8, "pro": 7, "mem": 8, "brd": 6}, "wordblast.io": {"fit": 5, "pro": 9, "mem": 7, "brd": 5}}`
 
-export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, preset = 'off') {
+export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, preset = 'off', signal) {
   if (!domains.length || !context.trim()) return {}
 
   const promptTemplate = fitPrompt || DEFAULT_FIT_PROMPT
@@ -226,7 +228,7 @@ export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, 
   const text = await aiChat([
     { role: 'system', content: systemContent },
     { role: 'user', content: domains.join('\n') },
-  ], apiKey, model, preset)
+  ], apiKey, model, preset, signal)
 
   const raw = extractJson(text)
   if (!raw || typeof raw !== 'object') return {}
@@ -256,11 +258,11 @@ export const DEFAULT_SYNONYM_PROMPT = `Given a domain name stem, return exactly 
 Vary the angle: include near-synonyms, evocative alternatives, and metaphorical variants.
 Return ONLY a JSON array of strings: ["word1", "word2", "word3", "word4", "word5", "word6"]`
 
-export async function generateSynonyms(stem, apiKey, systemPrompt, model, preset = 'off') {
+export async function generateSynonyms(stem, apiKey, systemPrompt, model, preset = 'off', signal) {
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_SYNONYM_PROMPT },
     { role: 'user', content: stem },
-  ], apiKey, model, preset)
+  ], apiKey, model, preset, signal)
   const arr = extractJson(text)
   if (!Array.isArray(arr)) return []
   return arr.filter(w => typeof w === 'string' && /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(w)).slice(0, 6)
@@ -282,7 +284,7 @@ const TLD_MEANINGS = {
   ly: 'short or action-oriented brand',
 }
 
-export async function associateDomains(domains, apiKey, systemPrompt, model, preset = 'off') {
+export async function associateDomains(domains, apiKey, systemPrompt, model, preset = 'off', signal) {
   if (!domains.length) return {}
 
   // Annotate each domain with its TLD meaning so the AI cannot ignore it
@@ -295,7 +297,7 @@ export async function associateDomains(domains, apiKey, systemPrompt, model, pre
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_ASSOC_PROMPT },
     { role: 'user', content: annotated.join('\n') },
-  ], apiKey, model, preset)
+  ], apiKey, model, preset, signal)
 
   const assocs = extractJson(text)
   if (!assocs || typeof assocs !== 'object') return {}

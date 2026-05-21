@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=26'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=26'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=26'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=27'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=27'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=27'
 
 // Active search controller
 let _abortController = null
@@ -783,7 +783,7 @@ async function rescoreFit() {
     const scores = await withElapsedStatus(
       document.getElementById('statusMsg'),
       'Re-scoring favorites...',
-      () => scoreFitBatch(favorites.map(d => d.domain), context, getKeyForModel(loadSetting('scoringModel')), fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+      (sig) => scoreFitBatch(favorites.map(d => d.domain), context, getKeyForModel(loadSetting('scoringModel')), fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off', sig)
     )
     trackCost(loadSetting('scoringModel'))
     for (const d of favorites) {
@@ -1025,7 +1025,7 @@ async function startSearch() {
       names = await withElapsedStatus(
         document.getElementById('statusMsg'),
         'Generating domain name ideas...',
-        () => generateDomainNames(desc, customPrompt || undefined, getKeyForModel(loadSetting('creativeModel')), loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
+        (sig) => generateDomainNames(desc, customPrompt || undefined, getKeyForModel(loadSetting('creativeModel')), loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off', sig)
       )
       trackCost(loadSetting('creativeModel'))
     } catch (e) {
@@ -1345,7 +1345,7 @@ function resumeSearch() {
   startSearch()
 }
 
-let _savedAiKey = ''
+let _aiKeySavedToastTimer = null
 
 // Multi-key store: one slot per provider. Filled by saveAiKey() based on prefix.
 const KEY_SLOTS = ['anthropicKey', 'openaiKey', 'groqKey']
@@ -1418,7 +1418,7 @@ function toggleKeyInput() {
 
 function onAiKeyInput(val) {
   _updateProviderBadge(val)
-  document.getElementById('saveAiKeyBtn').classList.toggle('hidden', val === _savedAiKey)
+  document.getElementById('saveAiKeyBtn').classList.toggle('hidden', !val)
 }
 
 function saveAiKey() {
@@ -1431,7 +1431,6 @@ function saveAiKey() {
   }
   saveSetting(slot, key)
   document.getElementById('aiKeyInput').value = ''
-  _savedAiKey = ''
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
   document.getElementById('aiKeyRow').classList.add('hidden')
   _updateProviderBadge()
@@ -1439,12 +1438,15 @@ function saveAiKey() {
   const el = document.getElementById('aiKeySaved')
   el.classList.remove('hidden')
   el.textContent = PROVIDER_LABELS[slot] + ' key saved'
-  setTimeout(() => el.classList.add('hidden'), 2000)
+  if (_aiKeySavedToastTimer) clearTimeout(_aiKeySavedToastTimer)
+  _aiKeySavedToastTimer = setTimeout(() => {
+    el.classList.add('hidden')
+    _aiKeySavedToastTimer = null
+  }, 2000)
 }
 
 function clearAiKey() {
   document.getElementById('aiKeyInput').value = ''
-  _savedAiKey = ''
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
   document.getElementById('aiKeyRow').classList.add('hidden')
 }
@@ -1818,7 +1820,15 @@ function trackCost(model) {
 }
 
 async function withElapsedStatus(statusEl, baseMsg, work, timeoutMs = 180000) {
-  if (!statusEl) return await work()
+  // Creates an AbortController and passes signal to work(). Calling abort() on
+  // timeout actually cancels the underlying fetch (no orphan billing), unlike
+  // the earlier Promise.race approach.
+  const controller = new AbortController()
+  const abortTimer = setTimeout(() => controller.abort(), timeoutMs)
+  if (!statusEl) {
+    try { return await work(controller.signal) }
+    finally { clearTimeout(abortTimer) }
+  }
   const start = Date.now()
   const tick = () => {
     const sec = Math.floor((Date.now() - start) / 1000)
@@ -1826,14 +1836,17 @@ async function withElapsedStatus(statusEl, baseMsg, work, timeoutMs = 180000) {
     statusEl.textContent = baseMsg + ' (' + sec + 's)' + warn
   }
   statusEl.textContent = baseMsg + ' (0s)'
-  const timer = setInterval(tick, 1000)
-  const timeoutP = new Promise((_, rej) =>
-    setTimeout(() => rej(new Error('Timed out after ' + Math.floor(timeoutMs / 1000) + 's — try Off preset or a smaller model')), timeoutMs)
-  )
+  const tickTimer = setInterval(tick, 1000)
   try {
-    return await Promise.race([work(), timeoutP])
+    return await work(controller.signal)
+  } catch (e) {
+    if (e && (e.name === 'AbortError' || e instanceof DOMException)) {
+      throw new Error('Timed out after ' + Math.floor(timeoutMs / 1000) + 's — try Off preset or a smaller model')
+    }
+    throw e
   } finally {
-    clearInterval(timer)
+    clearTimeout(abortTimer)
+    clearInterval(tickTimer)
   }
 }
 
