@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=29'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=29'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=29'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=30'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=30'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=30'
 
 // Active search controller
 let _abortController = null
@@ -803,7 +803,11 @@ async function rescoreFit() {
 
 const PAGE_SIZE = 100
 
+let _savedAvailCurrentPage = 0
+let _historyCurrentPage = 0
+
 function renderSavedAvailPage(available, page) {
+  _savedAvailCurrentPage = page
   const savedList = document.getElementById('savedAvailList')
   const total = available.length
   const totalPages = Math.ceil(total / PAGE_SIZE)
@@ -820,6 +824,7 @@ function renderSavedAvailPage(available, page) {
 }
 
 function renderHistoryPage(allDomains, page) {
+  _historyCurrentPage = page
   const list = document.getElementById('historyList')
   const total = allDomains.length
   const totalPages = Math.ceil(total / PAGE_SIZE)
@@ -858,15 +863,18 @@ function loadSaved() {
   if (available.length) {
     savedSection.classList.remove('hidden')
     document.getElementById('savedAvailCount').textContent = available.length
-    renderSavedAvailPage(available, 0)
+    const maxPage = Math.max(0, Math.ceil(available.length / PAGE_SIZE) - 1)
+    renderSavedAvailPage(available, Math.min(_savedAvailCurrentPage, maxPage))
   } else {
     savedSection.classList.add('hidden')
+    _savedAvailCurrentPage = 0
   }
 
   const historySection = document.getElementById('historySection')
   historySection.classList.remove('hidden')
   document.getElementById('historyTotal').textContent = domains.length
-  renderHistoryPage(domains, 0)
+  const maxHistoryPage = Math.max(0, Math.ceil(domains.length / PAGE_SIZE) - 1)
+  renderHistoryPage(domains, Math.min(_historyCurrentPage, maxHistoryPage))
 }
 
 function deleteDomain(id) {
