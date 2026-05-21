@@ -535,6 +535,26 @@
             <span id="savedCollapseIcon" class="text-green-400 text-2xl leading-none font-bold select-none">▾</span>
           </div>
           <div id="savedBody">
+            <div class="px-4 py-3 border-t border-green-100 bg-green-50/30 flex items-center gap-3 flex-wrap text-xs">
+              <input id="savedFilterText" type="text" placeholder="Filter by text..." oninput="onSavedFilterChange()"
+                class="flex-1 min-w-[160px] border border-green-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-400">
+              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap">
+                <input id="savedFilterNoNums" type="checkbox" onchange="onSavedFilterChange()"
+                  class="w-3.5 h-3.5 accent-green-500"> No numbers
+              </label>
+              <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
+                Min len <input id="savedFilterMinLen" type="number" min="2" max="30" placeholder="—"
+                  oninput="onSavedFilterChange()"
+                  class="w-12 border border-green-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-400">
+              </label>
+              <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
+                Max len <input id="savedFilterMaxLen" type="number" min="2" max="30" placeholder="—"
+                  oninput="onSavedFilterChange()"
+                  class="w-12 border border-green-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-400">
+              </label>
+              <button onclick="clearSavedFilters()" class="text-gray-400 hover:text-red-500 text-xs">clear</button>
+              <span id="savedFilterStatus" class="text-gray-500 text-xs ml-auto"></span>
+            </div>
             <div id="savedAvailList" class="border-t border-green-100"></div>
             <div id="savedAvailPager" class="flex items-center justify-center px-4 py-3 border-t border-green-100"></div>
           </div>
@@ -553,6 +573,37 @@
             </div>
           </div>
           <div id="historyBody">
+            <div class="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center gap-3 flex-wrap text-xs">
+              <input id="historyFilterText" type="text" placeholder="Filter by text..." oninput="onHistoryFilterChange()"
+                class="flex-1 min-w-[160px] border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-400">
+              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap">
+                <input id="historyFilterNoNums" type="checkbox" onchange="onHistoryFilterChange()"
+                  class="w-3.5 h-3.5 accent-cyan-500"> No numbers
+              </label>
+              <select id="historyFilterAvail" onchange="onHistoryFilterChange()"
+                class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-cyan-400">
+                <option value="all">All status</option>
+                <option value="available">Available only</option>
+                <option value="taken">Taken only</option>
+                <option value="unknown">Unknown only</option>
+              </select>
+              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap">
+                <input id="historyFilterFav" type="checkbox" onchange="onHistoryFilterChange()"
+                  class="w-3.5 h-3.5 accent-orange-500"> Favorites only
+              </label>
+              <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
+                Min len <input id="historyFilterMinLen" type="number" min="2" max="30" placeholder="—"
+                  oninput="onHistoryFilterChange()"
+                  class="w-12 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-400">
+              </label>
+              <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
+                Max len <input id="historyFilterMaxLen" type="number" min="2" max="30" placeholder="—"
+                  oninput="onHistoryFilterChange()"
+                  class="w-12 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-400">
+              </label>
+              <button onclick="clearHistoryFilters()" class="text-gray-400 hover:text-red-500 text-xs">clear</button>
+              <span id="historyFilterStatus" class="text-gray-500 text-xs ml-auto"></span>
+            </div>
             <div id="historyList" class="border-t border-gray-100"></div>
             <div id="historyPager" class="flex items-center justify-center px-4 py-3 border-t border-gray-100"></div>
           </div>
@@ -627,6 +678,6 @@
     </div>
   </footer>
 
-  <script type="module" src="js/app.js?v=30"></script>
+  <script type="module" src="js/app.js?v=31"></script>
 </body>
 </html>

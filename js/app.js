@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=30'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=30'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=30'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=31'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=31'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=31'
 
 // Active search controller
 let _abortController = null
@@ -806,6 +806,85 @@ const PAGE_SIZE = 100
 let _savedAvailCurrentPage = 0
 let _historyCurrentPage = 0
 
+// Filter state — preserved across re-renders. Updated by the on*FilterChange
+// handlers and consumed by applySavedFilters / applyHistoryFilters in loadSaved.
+const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null }
+const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, avail: 'all', favOnly: false }
+
+function _stemOf(domain) { return domain.replace(/\.[a-z]+$/, '') }
+
+function _matchesFilter(d, f) {
+  const stem = _stemOf(d.domain)
+  if (f.text && !d.domain.toLowerCase().includes(f.text.toLowerCase())) return false
+  if (f.noNums && /\d/.test(stem)) return false
+  if (f.minLen != null && stem.length < f.minLen) return false
+  if (f.maxLen != null && stem.length > f.maxLen) return false
+  return true
+}
+
+function applySavedFilters(list) { return list.filter(d => _matchesFilter(d, _savedFilter)) }
+
+function applyHistoryFilters(list) {
+  return list.filter(d => {
+    if (!_matchesFilter(d, _historyFilter)) return false
+    if (_historyFilter.favOnly && !d.favorite) return false
+    const a = d.available
+    switch (_historyFilter.avail) {
+      case 'available': return a === true
+      case 'taken': return a === false
+      case 'unknown': return a !== true && a !== false
+      default: return true
+    }
+  })
+}
+
+function onSavedFilterChange() {
+  _savedFilter.text = document.getElementById('savedFilterText').value.trim()
+  _savedFilter.noNums = document.getElementById('savedFilterNoNums').checked
+  const minV = document.getElementById('savedFilterMinLen').value
+  const maxV = document.getElementById('savedFilterMaxLen').value
+  _savedFilter.minLen = minV ? parseInt(minV, 10) : null
+  _savedFilter.maxLen = maxV ? parseInt(maxV, 10) : null
+  _savedAvailCurrentPage = 0
+  loadSaved()
+}
+
+function onHistoryFilterChange() {
+  _historyFilter.text = document.getElementById('historyFilterText').value.trim()
+  _historyFilter.noNums = document.getElementById('historyFilterNoNums').checked
+  _historyFilter.avail = document.getElementById('historyFilterAvail').value
+  _historyFilter.favOnly = document.getElementById('historyFilterFav').checked
+  const minV = document.getElementById('historyFilterMinLen').value
+  const maxV = document.getElementById('historyFilterMaxLen').value
+  _historyFilter.minLen = minV ? parseInt(minV, 10) : null
+  _historyFilter.maxLen = maxV ? parseInt(maxV, 10) : null
+  _historyCurrentPage = 0
+  loadSaved()
+}
+
+function clearSavedFilters() {
+  _savedFilter.text = ''; _savedFilter.noNums = false; _savedFilter.minLen = null; _savedFilter.maxLen = null
+  document.getElementById('savedFilterText').value = ''
+  document.getElementById('savedFilterNoNums').checked = false
+  document.getElementById('savedFilterMinLen').value = ''
+  document.getElementById('savedFilterMaxLen').value = ''
+  _savedAvailCurrentPage = 0
+  loadSaved()
+}
+
+function clearHistoryFilters() {
+  _historyFilter.text = ''; _historyFilter.noNums = false; _historyFilter.minLen = null
+  _historyFilter.maxLen = null; _historyFilter.avail = 'all'; _historyFilter.favOnly = false
+  document.getElementById('historyFilterText').value = ''
+  document.getElementById('historyFilterNoNums').checked = false
+  document.getElementById('historyFilterAvail').value = 'all'
+  document.getElementById('historyFilterFav').checked = false
+  document.getElementById('historyFilterMinLen').value = ''
+  document.getElementById('historyFilterMaxLen').value = ''
+  _historyCurrentPage = 0
+  loadSaved()
+}
+
 function renderSavedAvailPage(available, page) {
   _savedAvailCurrentPage = page
   const savedList = document.getElementById('savedAvailList')
@@ -863,8 +942,11 @@ function loadSaved() {
   if (available.length) {
     savedSection.classList.remove('hidden')
     document.getElementById('savedAvailCount').textContent = available.length
-    const maxPage = Math.max(0, Math.ceil(available.length / PAGE_SIZE) - 1)
-    renderSavedAvailPage(available, Math.min(_savedAvailCurrentPage, maxPage))
+    const filtered = applySavedFilters(available)
+    const statusEl = document.getElementById('savedFilterStatus')
+    if (statusEl) statusEl.textContent = filtered.length === available.length ? '' : filtered.length + ' of ' + available.length + ' match'
+    const maxPage = Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1)
+    renderSavedAvailPage(filtered, Math.min(_savedAvailCurrentPage, maxPage))
   } else {
     savedSection.classList.add('hidden')
     _savedAvailCurrentPage = 0
@@ -873,8 +955,11 @@ function loadSaved() {
   const historySection = document.getElementById('historySection')
   historySection.classList.remove('hidden')
   document.getElementById('historyTotal').textContent = domains.length
-  const maxHistoryPage = Math.max(0, Math.ceil(domains.length / PAGE_SIZE) - 1)
-  renderHistoryPage(domains, Math.min(_historyCurrentPage, maxHistoryPage))
+  const filteredHistory = applyHistoryFilters(domains)
+  const histStatusEl = document.getElementById('historyFilterStatus')
+  if (histStatusEl) histStatusEl.textContent = filteredHistory.length === domains.length ? '' : filteredHistory.length + ' of ' + domains.length + ' match'
+  const maxHistoryPage = Math.max(0, Math.ceil(filteredHistory.length / PAGE_SIZE) - 1)
+  renderHistoryPage(filteredHistory, Math.min(_historyCurrentPage, maxHistoryPage))
 }
 
 function deleteDomain(id) {
@@ -2343,6 +2428,10 @@ Object.assign(window, {
   onAssociationPromptUpdate,
   onAssociationPromptDelete,
   onLoopToggle,
+  onSavedFilterChange,
+  onHistoryFilterChange,
+  clearSavedFilters,
+  clearHistoryFilters,
   onExportAvailable,
   onLoopIntervalInput,
   onLoopMaxIterationsInput,
