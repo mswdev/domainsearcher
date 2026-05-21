@@ -785,7 +785,11 @@ async function rescoreFit() {
   const aiKey = loadSetting('aiApiKey') || undefined
   const fitPrompt = document.getElementById('fitPromptBox')?.value || loadSetting('fitPrompt') || undefined
   try {
-    const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+    const scores = await withElapsedStatus(
+      document.getElementById('statusMsg'),
+      'Re-scoring favorites...',
+      () => scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+    )
     trackCost(loadSetting('scoringModel'))
     for (const d of favorites) {
       if (scores[d.domain] !== undefined) {
@@ -1022,10 +1026,13 @@ async function startSearch() {
   document.getElementById('resumeBanner').classList.add('hidden')
 
   try {
-    document.getElementById('statusMsg').textContent = 'Generating domain name ideas...'
     let names
     try {
-      names = await generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
+      names = await withElapsedStatus(
+        document.getElementById('statusMsg'),
+        'Generating domain name ideas...',
+        () => generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off')
+      )
       trackCost(loadSetting('creativeModel'))
     } catch (e) {
       document.getElementById('statusMsg').textContent = 'Error: ' + e.message
@@ -1745,6 +1752,26 @@ function trackCost(model) {
     renderCostIndicator()
   }
   return c
+}
+
+async function withElapsedStatus(statusEl, baseMsg, work, timeoutMs = 180000) {
+  if (!statusEl) return await work()
+  const start = Date.now()
+  const tick = () => {
+    const sec = Math.floor((Date.now() - start) / 1000)
+    const warn = sec >= 90 ? ' — still working, Balanced/Max can take 1-2 min' : ''
+    statusEl.textContent = baseMsg + ' (' + sec + 's)' + warn
+  }
+  statusEl.textContent = baseMsg + ' (0s)'
+  const timer = setInterval(tick, 1000)
+  const timeoutP = new Promise((_, rej) =>
+    setTimeout(() => rej(new Error('Timed out after ' + Math.floor(timeoutMs / 1000) + 's — try Off preset or a smaller model')), timeoutMs)
+  )
+  try {
+    return await Promise.race([work(), timeoutP])
+  } finally {
+    clearInterval(timer)
+  }
 }
 
 function fmtCost(n) {
