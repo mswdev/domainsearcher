@@ -1,4 +1,4 @@
-import { db, saveSetting, loadSetting } from './storage.js?v=15'
+import { db, saveSetting, loadSetting, hydrate } from './storage.js?v=15'
 import { checkDomainAvailable, checkMultipleZones } from './check.js?v=15'
 import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT } from './generate.js?v=15'
 
@@ -277,7 +277,7 @@ async function checkOne() {
     const aiKey = loadSetting('aiApiKey') || undefined
     const synonymPrompt = document.getElementById('synonymsPromptBox')?.value || loadSetting('synonymPrompt') || undefined
     let synonyms = []
-    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt) } catch {}
+    try { synonyms = await generateSynonyms(name, aiKey, synonymPrompt, loadSetting('creativeModel')) } catch {}
 
     if (synonyms.length) {
       html += '<div class="text-xs text-cyan-500 font-medium mt-3 mb-1">synonyms of "' + name + '"</div>'
@@ -657,7 +657,7 @@ async function loadFavData(favorites) {
   const needFit = newFavs.filter(d => fitCache[d.id] == null)
   if (needFit.length && fitContext) {
     try {
-      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey)
+      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, aiKey, undefined, loadSetting('scoringModel'))
       for (const d of needFit) {
         if (scores[d.domain] !== undefined) {
           const s = scores[d.domain]
@@ -674,7 +674,7 @@ async function loadFavData(favorites) {
   const needAssoc = newFavs.filter(d => assocCache[d.id] == null)
   if (needAssoc.length) {
     try {
-      const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt)
+      const assocs = await associateDomains(needAssoc.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'))
       for (const d of needAssoc) {
         if (assocs[d.domain]) {
           assocCache[d.id] = assocs[d.domain]
@@ -721,7 +721,7 @@ async function refreshAssociations() {
   const aiKey = loadSetting('aiApiKey') || undefined
   const assocPrompt = getAssocPrompt()
   try {
-    const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt)
+    const assocs = await associateDomains(favorites.map(d => d.domain), aiKey, assocPrompt, loadSetting('creativeModel'))
     const updated = Object.keys(assocs).length
     if (!updated) throw new Error('AI returned no associations — check API key or prompt')
     for (const d of favorites) {
@@ -782,7 +782,7 @@ async function rescoreFit() {
   const aiKey = loadSetting('aiApiKey') || undefined
   const fitPrompt = document.getElementById('fitPromptBox')?.value || loadSetting('fitPrompt') || undefined
   try {
-    const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt)
+    const scores = await scoreFitBatch(favorites.map(d => d.domain), context, aiKey, fitPrompt, loadSetting('scoringModel'))
     for (const d of favorites) {
       if (scores[d.domain] !== undefined) {
         const s = scores[d.domain]
@@ -1021,7 +1021,7 @@ async function startSearch() {
     document.getElementById('statusMsg').textContent = 'Generating domain name ideas...'
     let names
     try {
-      names = await generateDomainNames(desc, customPrompt || undefined, aiKey)
+      names = await generateDomainNames(desc, customPrompt || undefined, aiKey, loadSetting('creativeModel'), loadSetting('batchSize') || 60)
     } catch (e) {
       document.getElementById('statusMsg').textContent = 'Error: ' + e.message
       searchDone()
@@ -1380,6 +1380,7 @@ function saveAiKey() {
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
   _updateProviderBadge(key)
   if (!key) document.getElementById('aiKeyRow').classList.add('hidden')
+  populateModelDropdowns()
   const el = document.getElementById('aiKeySaved')
   el.classList.remove('hidden')
   setTimeout(() => el.classList.add('hidden'), 2000)
@@ -1392,6 +1393,7 @@ function clearAiKey() {
   document.getElementById('saveAiKeyBtn').classList.add('hidden')
   document.getElementById('aiKeyRow').classList.add('hidden')
   saveSetting('aiApiKey', '')
+  populateModelDropdowns()
 }
 
 function loadAiKey() {
@@ -1404,23 +1406,87 @@ function loadAiKey() {
   _updateProviderBadge(val || '')
 }
 
-// --- Init ---
-loadWeights()
-loadSearchZones()
-loadCompareZones()
-loadCheckZones()
-loadGenPrompt()
-loadAssocPrompt()
-loadFitPrompt()
-loadSynonymPrompt()
-loadAiKey()
-loadFitContext()
-loadDescription()
-loadSaved()
-checkActiveSearch()
+// --- Model dropdowns ---
+const MODEL_OPTIONS = {
+  'Claude (Anthropic)': [
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7 (default)' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  ],
+  'OpenAI': [
+    { id: 'gpt-4o', label: 'GPT-4o (default)' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
+  ],
+  'Groq (default)': [
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (default)' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+  ],
+  'Groq': [
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile (default)' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+  ],
+}
 
-// Restore collapsed states
-;['search', 'score', 'saved', 'history'].forEach(restoreSectionCollapse)
+function populateModelDropdowns() {
+  const key = loadSetting('aiApiKey') || ''
+  const provider = detectProvider(key)
+  const options = MODEL_OPTIONS[provider] || MODEL_OPTIONS['Groq (default)']
+  const defaultId = options[0].id
+  const validIds = options.map(o => o.id)
+
+  for (const [selectId, settingKey] of [['creativeModel', 'creativeModel'], ['scoringModel', 'scoringModel']]) {
+    const sel = document.getElementById(selectId)
+    if (!sel) continue
+    const saved = loadSetting(settingKey)
+    const chosen = validIds.includes(saved) ? saved : defaultId
+    while (sel.firstChild) sel.removeChild(sel.firstChild)
+    for (const o of options) {
+      const opt = document.createElement('option')
+      opt.value = o.id
+      opt.textContent = o.label
+      if (o.id === chosen) opt.selected = true
+      sel.appendChild(opt)
+    }
+    if (saved !== chosen) saveSetting(settingKey, chosen)
+  }
+}
+
+function onCreativeModelChange(val) { saveSetting('creativeModel', val) }
+function onScoringModelChange(val) { saveSetting('scoringModel', val) }
+function onBatchSizeInput(val) {
+  const n = parseInt(val, 10)
+  const clamped = isNaN(n) ? 60 : Math.min(200, Math.max(10, n))
+  saveSetting('batchSize', clamped)
+}
+
+function loadBatchSize() {
+  const v = loadSetting('batchSize')
+  if (v != null) document.getElementById('batchSize').value = v
+}
+
+// --- Init ---
+async function init() {
+  await hydrate()
+  loadWeights()
+  loadSearchZones()
+  loadCompareZones()
+  loadCheckZones()
+  loadGenPrompt()
+  loadAssocPrompt()
+  loadFitPrompt()
+  loadSynonymPrompt()
+  loadAiKey()
+  loadFitContext()
+  loadDescription()
+  loadBatchSize()
+  populateModelDropdowns()
+  loadSaved()
+  checkActiveSearch()
+
+  // Restore collapsed states
+  ;['search', 'score', 'saved', 'history'].forEach(restoreSectionCollapse)
+}
+init()
 
 // Expose all functions called from inline onclick attributes
 Object.assign(window, {
@@ -1466,6 +1532,9 @@ Object.assign(window, {
   onAiKeyInput,
   onFitContextInput,
   onDescriptionInput,
+  onCreativeModelChange,
+  onScoringModelChange,
+  onBatchSizeInput,
   saveWeights,
   renderScores,
   dismissResume,

@@ -169,6 +169,37 @@
               <button id="saveAiKeyBtn" onclick="saveAiKey()" class="hidden text-xs bg-cyan-600 hover:bg-cyan-700 text-white font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">Save key</button>
               <button onclick="clearAiKey()" class="text-xs text-gray-300 hover:text-red-400 whitespace-nowrap">clear</button>
             </div>
+            <!-- AI Models settings -->
+            <div class="mt-3">
+              <button onclick="document.getElementById('aiModelsBody').classList.toggle('hidden');this.querySelector('span').textContent=document.getElementById('aiModelsBody').classList.contains('hidden')?'▸':'▾'" class="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+                <span>▾</span> AI models &amp; batch size
+              </button>
+              <div id="aiModelsBody" class="mt-2 space-y-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Creative</label>
+                  <select id="creativeModel" onchange="onCreativeModelChange(this.value)"
+                    class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                    <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
+                  </select>
+                </div>
+                <p class="text-[11px] text-gray-400 pl-26 ml-24">Creative — generation + synonyms + associations</p>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Scoring</label>
+                  <select id="scoringModel" onchange="onScoringModelChange(this.value)"
+                    class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400 bg-white">
+                    <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
+                  </select>
+                </div>
+                <p class="text-[11px] text-gray-400 ml-24">Scoring — fit / pronounceability / memorability / brand</p>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Names per search</label>
+                  <input id="batchSize" type="number" min="10" max="200" step="10" value="60"
+                    oninput="onBatchSizeInput(this.value)"
+                    class="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-cyan-400">
+                </div>
+                <p class="text-[11px] text-gray-400 ml-24">How many domain candidates to generate per search (10–200)</p>
+              </div>
+            </div>
           </div>
           <label class="block text-sm font-medium text-gray-700 mb-2">Describe your idea</label>
           <textarea id="description" rows="3" placeholder="e.g. AI tool for generating marketing copy and ad creatives"
