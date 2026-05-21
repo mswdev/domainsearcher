@@ -89,18 +89,24 @@ export function providerForModel(model) {
 }
 
 async function aiChat(messages, apiKey, model, preset = 'off') {
+  // Reset usage on every entry so a late-resolving orphan fetch (e.g. one we
+  // raced past via withElapsedStatus) can't carry stale tokens into the next
+  // trackCost() read.
+  _lastUsage = null
+
   const route = providerForModel(model)
+  const resolvedModel = model || (route === 'anthropic' ? 'claude-opus-4-6' : route === 'openai' ? 'gpt-4o-mini' : BUNDLED_MODEL)
   const key = apiKey || (route === 'groq' ? BUNDLED_API_KEY : undefined)
   if (!key) throw new AIAPIError(401, 'No API key set for provider: ' + route)
 
-  if (preset !== 'off' && (route !== 'anthropic' || (model || '').includes('haiku'))) {
+  if (preset !== 'off' && (route !== 'anthropic' || resolvedModel.includes('haiku'))) {
     preset = 'off'
   }
 
   if (route === 'anthropic') {
     const system = messages.find(m => m.role === 'system')?.content
     const userMsgs = messages.filter(m => m.role !== 'system')
-    const body = buildAnthropicBody(resolvedAnthropicModel, preset, system, userMsgs)
+    const body = buildAnthropicBody(resolvedModel, preset, system, userMsgs)
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -129,7 +135,6 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
   const baseUrl = route === 'openai'
     ? 'https://api.openai.com/v1'
     : BUNDLED_BASE_URL
-  const resolvedModel = model || (route === 'openai' ? 'gpt-4o-mini' : BUNDLED_MODEL)
 
   const res = await fetch(baseUrl + '/chat/completions', {
     method: 'POST',

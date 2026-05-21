@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=25'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=25'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=25'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=26'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=26'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=26'
 
 // Active search controller
 let _abortController = null
@@ -1450,12 +1450,21 @@ function clearAiKey() {
 }
 
 function loadAiKey() {
-  // One-time migration: legacy aiApiKey → per-provider slot
+  // One-time migration: legacy aiApiKey → per-provider slot.
+  // Only clear the legacy key on a successful migration (slot copied) or when
+  // the matching slot already has a value (already migrated). If the legacy
+  // key has an unrecognized prefix (malformed paste, future provider), leave
+  // it alone so the user can recover it.
   const legacy = loadSetting('aiApiKey')
   if (legacy) {
     const slot = _slotForKey(legacy)
-    if (slot && !loadSetting(slot)) saveSetting(slot, legacy)
-    saveSetting('aiApiKey', '')
+    if (slot && !loadSetting(slot)) {
+      saveSetting(slot, legacy)
+      saveSetting('aiApiKey', '')
+    } else if (slot && loadSetting(slot)) {
+      saveSetting('aiApiKey', '')
+    }
+    // else: unrecognized prefix — preserve, surface via badge if needed
   }
   _updateProviderBadge()
 }
