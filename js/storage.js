@@ -1,3 +1,10 @@
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  DEFAULT_FIT_PROMPT,
+  DEFAULT_SYNONYM_PROMPT,
+  DEFAULT_ASSOC_PROMPT,
+} from './generate.js'
+
 // In-memory state with debounced server flush.
 //
 // Storage is split into two files server-side:
@@ -311,6 +318,31 @@ export async function hydrate() {
       }
     }
 
+    // 5. Seed built-in prompts into each library if not already present.
+    //    Done after migration so re-hydrates don't duplicate the seeds.
+    const builtins = {
+      generation:  { name: 'Default — startup brandable names', text: DEFAULT_SYSTEM_PROMPT },
+      scoring:     { name: 'Default — fit/pro/mem/brd scoring', text: DEFAULT_FIT_PROMPT },
+      synonym:     { name: 'Default — synonym expansion', text: DEFAULT_SYNONYM_PROMPT },
+      association: { name: 'Default — domain associations', text: DEFAULT_ASSOC_PROMPT },
+    }
+    let seededAny = false
+    for (const [kind, { name, text }] of Object.entries(builtins)) {
+      if (!_state.config.prompts[kind]) _state.config.prompts[kind] = []
+      const hasBuiltin = _state.config.prompts[kind].some(p => p && p.isBuiltin)
+      if (!hasBuiltin) {
+        _state.config.prompts[kind].unshift({
+          id: 'builtin_' + kind,
+          name,
+          text,
+          isBuiltin: true,
+          createdAt: new Date().toISOString(),
+        })
+        seededAny = true
+      }
+    }
+    if (seededAny) _scheduleConfigFlush()
+
     _hydrated = true
   })()
 
@@ -497,6 +529,10 @@ class DomainDB {
       seen.add(s)
       _state.db.seenStems.push(s)
       added++
+    }
+    // Cap growth so a 12-hour loop doesn't bloat db.json. Keep most-recent 4000.
+    if (_state.db.seenStems.length > 4000) {
+      _state.db.seenStems = _state.db.seenStems.slice(-4000)
     }
     if (added > 0) _scheduleDbFlush()
   }

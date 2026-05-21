@@ -1,3 +1,17 @@
+export class AIAPIError extends Error {
+  constructor(status, body) {
+    super('AI API error: ' + status + ' ' + body)
+    this.name = 'AIAPIError'
+    this.status = status
+    this.body = body
+  }
+}
+
+// Usage from the most recent aiChat call. Side-channel so we don't have to
+// change every public function's return shape. Read via getLastUsage().
+let _lastUsage = null
+export function getLastUsage() { return _lastUsage }
+
 function extractJson(text) {
   if (!text) return null
   let s = text.trim()
@@ -88,8 +102,12 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
       },
       body: JSON.stringify(body),
     })
-    if (!res.ok) throw new Error('Anthropic API error: ' + res.status + ' ' + await res.text())
+    if (!res.ok) {
+      _lastUsage = null
+      throw new AIAPIError(res.status, await res.text())
+    }
     const data = await res.json()
+    _lastUsage = data.usage || null
     const textBlock = data.content?.find(b => b.type === 'text')
     if (!textBlock?.text) {
       console.error('Anthropic returned no text block', { stop_reason: data.stop_reason, usage: data.usage, content_types: data.content?.map(b => b.type) })
@@ -112,8 +130,12 @@ async function aiChat(messages, apiKey, model, preset = 'off') {
     },
     body: JSON.stringify({ model: resolvedModel, messages, max_tokens: 2048 }),
   })
-  if (!res.ok) throw new Error('AI API error: ' + res.status)
+  if (!res.ok) {
+    _lastUsage = null
+    throw new AIAPIError(res.status, await res.text())
+  }
   const data = await res.json()
+  _lastUsage = data.usage || null
   return data.choices?.[0]?.message?.content || ''
 }
 

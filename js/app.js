@@ -1,6 +1,6 @@
 import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=15'
 import { checkDomainAvailable, checkMultipleZones } from './check.js?v=15'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT } from './generate.js?v=15'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=15'
 
 // Active search controller
 let _abortController = null
@@ -1474,7 +1474,11 @@ function loadBatchSize() {
 
 // --- Thinking presets ---
 const THINKING_MODELS = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6']
-const PRESET_BADGES = { off: '🟢', balanced: '🟡', max: '🔴' }
+const PRESET_BADGE_CONFIG = {
+  off:      { color: 'bg-green-500',  label: 'Off', title: 'No thinking. Cheapest.' },
+  balanced: { color: 'bg-yellow-500', label: 'Bal', title: 'Adaptive thinking, medium effort. ~5-10x cost.' },
+  max:      { color: 'bg-red-500',    label: 'Max', title: 'Adaptive thinking, max effort. ~10-20x cost.' },
+}
 
 function labelForModel(id) {
   for (const opts of Object.values(MODEL_OPTIONS)) {
@@ -1488,7 +1492,16 @@ function updateCostBadge(slot) {
   const badge = document.getElementById(slot + 'CostBadge')
   if (!badge) return
   const preset = loadSetting(slot + 'Preset') || 'off'
-  badge.textContent = PRESET_BADGES[preset] || '🟢'
+  const c = PRESET_BADGE_CONFIG[preset] || PRESET_BADGE_CONFIG.off
+  badge.innerHTML = ''
+  const dot = document.createElement('span')
+  dot.className = `inline-block w-2 h-2 rounded-full ${c.color} mr-1.5 align-middle`
+  const text = document.createElement('span')
+  text.textContent = c.label
+  text.className = 'text-xs text-gray-600 align-middle'
+  badge.title = c.title
+  badge.appendChild(dot)
+  badge.appendChild(text)
 }
 
 function updatePresetAvailability() {
@@ -1569,6 +1582,7 @@ function onIdeaSave() {
   const created = lib.ideas.create(name, text)
   populateIdeaPicker()
   if (created?.id) document.getElementById('ideaPicker').value = created.id
+  populateLoopPickers()
 }
 
 function onIdeaUpdate() {
@@ -1576,6 +1590,7 @@ function onIdeaUpdate() {
   if (!id) { toast('No saved idea selected'); return }
   lib.ideas.update(id, { text: document.getElementById('description').value })
   toast('Idea updated')
+  populateLoopPickers()
 }
 
 function onIdeaDelete() {
@@ -1587,6 +1602,7 @@ function onIdeaDelete() {
   lib.ideas.delete(id)
   populateIdeaPicker()
   sel.value = ''
+  populateLoopPickers()
 }
 
 const PROMPT_KIND_CONFIG = {
@@ -1628,9 +1644,10 @@ function _promptSaveHandler(kind) {
   const text = document.getElementById(cfg.textareaId).value
   const name = prompt('Name this ' + kind + ' prompt:')
   if (!name) return
-  const created = lib.prompts.create(kind, name, text)
+  const created = lib.prompts.create(kind, { name, text })
   populatePromptPicker(kind)
   if (created?.id) document.getElementById(cfg.pickerId).value = created.id
+  populateLoopPickers()
 }
 
 function _promptUpdateHandler(kind) {
@@ -1652,6 +1669,7 @@ function _promptDeleteHandler(kind) {
   lib.prompts.delete(kind, id)
   populatePromptPicker(kind)
   sel.value = ''
+  populateLoopPickers()
 }
 
 function onGenerationPromptPicked() { _promptPickedHandler('generation') }
@@ -1684,6 +1702,29 @@ let _loopFoundCount = 0
 let _loopController = null
 let _loopRunId = null
 let _loopStatusTimer = null
+let _loopBackoffMultiplier = 1
+let _loopTotalCost = 0
+
+// Per-million-token pricing (USD) for the Anthropic models we support.
+// in = input, out = output, cc = cache_creation_input, cr = cache_read_input.
+const PRICING = {
+  'claude-opus-4-7':   { in: 5,  out: 25, cc: 6.25, cr: 0.50 },
+  'claude-opus-4-6':   { in: 5,  out: 25, cc: 6.25, cr: 0.50 },
+  'claude-sonnet-4-6': { in: 3,  out: 15, cc: 3.75, cr: 0.30 },
+  'claude-haiku-4-5':  { in: 1,  out: 5,  cc: 1.25, cr: 0.10 },
+}
+
+function estimateCost(usage, model) {
+  if (!usage) return 0
+  const p = PRICING[model]
+  if (!p) return 0
+  return (
+    (usage.input_tokens || 0) * p.in / 1_000_000 +
+    (usage.output_tokens || 0) * p.out / 1_000_000 +
+    (usage.cache_creation_input_tokens || 0) * p.cc / 1_000_000 +
+    (usage.cache_read_input_tokens || 0) * p.cr / 1_000_000
+  )
+}
 
 function populateLoopPickers() {
   const ideaSel = document.getElementById('loopActiveIdea')
@@ -1788,6 +1829,8 @@ function startLoop() {
   _loopStartTime = Date.now()
   _loopIteration = 0
   _loopFoundCount = 0
+  _loopBackoffMultiplier = 1
+  _loopTotalCost = 0
   _loopRunId = 'loop_' + Date.now()
   _loopController = new AbortController()
   const btn = document.getElementById('loopStartStop')
@@ -1827,14 +1870,26 @@ async function loopTick() {
     const start = Date.now()
     try {
       await runOneLoopIteration()
+      // Successful iteration clears any prior backoff.
+      _loopBackoffMultiplier = 1
     } catch (e) {
       logLoopIteration({ timestamp: new Date().toISOString(), iteration: _loopIteration, error: String(e) })
       console.error('Loop iteration failed', e)
+      if (e instanceof AIAPIError && e.status === 400) {
+        toast('Loop stopped: API returned 400 (likely prompt too long). Reduce max-seen-stems.')
+        stopLoop()
+        return
+      }
+      if (e instanceof AIAPIError && (e.status === 429 || e.status >= 500)) {
+        _loopBackoffMultiplier = Math.min((_loopBackoffMultiplier || 1) * 2, 8)
+      } else {
+        _loopBackoffMultiplier = 1
+      }
     }
     _loopIteration++
     const elapsed = (Date.now() - start) / 1000
     const interval = Math.max(10, loadSetting('loopInterval') || 30)
-    const wait = Math.max(0, interval - elapsed)
+    const wait = Math.max(0, interval * (_loopBackoffMultiplier || 1) - elapsed)
     if (_loopActive && wait > 0) await sleep(wait * 1000)
   }
 }
@@ -1865,7 +1920,10 @@ async function runOneLoopIteration() {
     ? idea + '\n\nDo NOT repeat any of these previously-generated stems: ' + seenSlice
     : idea
 
+  let iterationCost = 0
+
   const names = await generateDomainNames(ideaWithSeen, finalPrompt || undefined, apiKey, model, batchSize, preset)
+  iterationCost += estimateCost(getLastUsage(), model)
   const seenSet = new Set(seen)
   const fresh = names.filter(n => !seenSet.has(n))
   db.addSeenStems(names)
@@ -1906,6 +1964,7 @@ async function runOneLoopIteration() {
     const scoringPreset = loadSetting('loopScoringPreset') || 'off'
     try {
       const scores = await scoreFitBatch(available, idea, apiKey, null, scoringModel, scoringPreset)
+      iterationCost += estimateCost(getLastUsage(), scoringModel)
       for (const [domain, s] of Object.entries(scores || {})) {
         const rec = db.findUnique(domain)
         if (rec) db.update(rec.id, { fitScore: s.fit, proScore: s.pro, memScore: s.mem, brdScore: s.brd })
@@ -1914,6 +1973,8 @@ async function runOneLoopIteration() {
       console.error('Loop scoring failed', e)
     }
   }
+
+  _loopTotalCost += iterationCost
 
   logLoopIteration({
     timestamp: new Date().toISOString(),
@@ -1925,6 +1986,7 @@ async function runOneLoopIteration() {
     available: available.length,
     model,
     preset,
+    cost: iterationCost,
   })
 
   try { loadSaved() } catch {}
@@ -1943,7 +2005,8 @@ function updateLoopStatus() {
   const secs = elapsed % 60
   const elapsedStr = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + 'm ' + secs + 's'
   el.textContent = 'Running — iteration ' + _loopIteration + '/' + (maxIter || '∞') +
-    ', found ' + _loopFoundCount + ' / ' + seenCount + ' seen, started ' + elapsedStr + ' ago'
+    ', found ' + _loopFoundCount + ' / ' + seenCount + ' seen, started ' + elapsedStr + ' ago' +
+    ', ~$' + _loopTotalCost.toFixed(2) + ' so far'
 }
 
 async function refreshLoopEventLog() {
