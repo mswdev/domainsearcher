@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=28'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=28'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=28'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=29'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=29'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=29'
 
 // Active search controller
 let _abortController = null
@@ -1785,7 +1785,20 @@ function onAssociationPromptUpdate()  { _promptUpdateHandler('association') }
 function onAssociationPromptDelete()  { _promptDeleteHandler('association') }
 
 // --- Loop Mode ---
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+// Sleep that resolves immediately when the given AbortSignal fires. Used in
+// loopTick so pressing Stop during the inter-iteration wait doesn't strand
+// the loop for up to `loopInterval` seconds before noticing.
+function sleepAbortable(ms, signal) {
+  return new Promise(resolve => {
+    if (signal?.aborted) { resolve(); return }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 let _loopActive = false
 let _loopStartTime = null
@@ -2056,7 +2069,13 @@ async function loopTick() {
     const elapsed = (Date.now() - start) / 1000
     const interval = Math.max(10, loadSetting('loopInterval') || 30)
     const wait = Math.max(0, interval * (_loopBackoffMultiplier || 1) - elapsed)
-    if (_loopActive && wait > 0) await sleep(wait * 1000)
+    if (_loopActive && wait > 0) {
+      // Update status during the wait so users see countdown rather than "Running"
+      const el = document.getElementById('loopStatus')
+      const baseText = el ? el.textContent : ''
+      if (el) el.textContent = baseText + ' — next run in ' + Math.ceil(wait) + 's'
+      await sleepAbortable(wait * 1000, _loopController?.signal)
+    }
   }
 }
 
