@@ -1,4 +1,4 @@
-import { db, saveSetting, loadSetting, hydrate, lib } from './storage.js?v=15'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=15'
 import { checkDomainAvailable, checkMultipleZones } from './check.js?v=15'
 import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, detectProvider, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT } from './generate.js?v=15'
 
@@ -1435,10 +1435,16 @@ function populateModelDropdowns() {
   const defaultId = options[0].id
   const validIds = options.map(o => o.id)
 
-  for (const [selectId, settingKey] of [['creativeModel', 'creativeModel'], ['scoringModel', 'scoringModel']]) {
+  const slots = [
+    ['creativeModel', 'creativeModel', null],
+    ['scoringModel', 'scoringModel', null],
+    ['loopCreativeModel', 'loopCreativeModel', 'creativeModel'],
+    ['loopScoringModel', 'loopScoringModel', 'scoringModel'],
+  ]
+  for (const [selectId, settingKey, fallbackKey] of slots) {
     const sel = document.getElementById(selectId)
     if (!sel) continue
-    const saved = loadSetting(settingKey)
+    const saved = loadSetting(settingKey) ?? (fallbackKey ? loadSetting(fallbackKey) : null)
     const chosen = validIds.includes(saved) ? saved : defaultId
     while (sel.firstChild) sel.removeChild(sel.firstChild)
     for (const o of options) {
@@ -1448,7 +1454,7 @@ function populateModelDropdowns() {
       if (o.id === chosen) opt.selected = true
       sel.appendChild(opt)
     }
-    if (saved !== chosen) saveSetting(settingKey, chosen)
+    if (loadSetting(settingKey) !== chosen) saveSetting(settingKey, chosen)
   }
   updatePresetAvailability()
 }
@@ -1486,7 +1492,7 @@ function updateCostBadge(slot) {
 }
 
 function updatePresetAvailability() {
-  for (const slot of ['creative', 'scoring']) {
+  for (const slot of ['creative', 'scoring', 'loopCreative', 'loopScoring']) {
     const model = loadSetting(slot + 'Model')
     const presetSel = document.getElementById(slot + 'Preset')
     if (!presetSel) continue
@@ -1514,7 +1520,7 @@ function onScoringPresetChange(val) {
 }
 
 function loadPresets() {
-  for (const slot of ['creative', 'scoring']) {
+  for (const slot of ['creative', 'scoring', 'loopCreative', 'loopScoring']) {
     if (loadSetting(slot + 'Preset') == null) saveSetting(slot + 'Preset', 'off')
     const sel = document.getElementById(slot + 'Preset')
     if (sel) sel.value = loadSetting(slot + 'Preset') || 'off'
@@ -1668,6 +1674,311 @@ function onAssociationPromptSave()    { _promptSaveHandler('association') }
 function onAssociationPromptUpdate()  { _promptUpdateHandler('association') }
 function onAssociationPromptDelete()  { _promptDeleteHandler('association') }
 
+// --- Loop Mode ---
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+let _loopActive = false
+let _loopStartTime = null
+let _loopIteration = 0
+let _loopFoundCount = 0
+let _loopController = null
+let _loopRunId = null
+let _loopStatusTimer = null
+
+function populateLoopPickers() {
+  const ideaSel = document.getElementById('loopActiveIdea')
+  if (ideaSel) {
+    const cur = loadSetting('loopActiveIdea') || ''
+    const items = (lib && lib.ideas && typeof lib.ideas.list === 'function') ? lib.ideas.list() : []
+    ideaSel.innerHTML = '<option value="">— Use current description —</option>'
+    for (const it of items) {
+      const opt = document.createElement('option')
+      opt.value = it.id
+      opt.textContent = it.name
+      if (it.id === cur) opt.selected = true
+      ideaSel.appendChild(opt)
+    }
+  }
+  const promptSel = document.getElementById('loopActivePrompt')
+  if (promptSel) {
+    const cur = loadSetting('loopActivePrompt') || ''
+    const items = (lib && lib.prompts && typeof lib.prompts.list === 'function') ? lib.prompts.list('generation') : []
+    promptSel.innerHTML = '<option value="">— Use default —</option>'
+    for (const it of items) {
+      const opt = document.createElement('option')
+      opt.value = it.id
+      opt.textContent = it.name + (it.isBuiltin ? ' (built-in)' : '')
+      if (it.id === cur) opt.selected = true
+      promptSel.appendChild(opt)
+    }
+  }
+}
+
+function loadLoopSettings() {
+  if (loadSetting('loopInterval') == null) saveSetting('loopInterval', 30)
+  if (loadSetting('loopMaxSeenStems') == null) saveSetting('loopMaxSeenStems', 200)
+  if (loadSetting('loopCreativePreset') == null) saveSetting('loopCreativePreset', 'off')
+  if (loadSetting('loopScoringPreset') == null) saveSetting('loopScoringPreset', 'off')
+  if (loadSetting('loopScoringEnabled') == null) saveSetting('loopScoringEnabled', false)
+  if (loadSetting('loopCreativeModel') == null) {
+    const fallback = loadSetting('creativeModel')
+    if (fallback) saveSetting('loopCreativeModel', fallback)
+  }
+  if (loadSetting('loopScoringModel') == null) {
+    const fallback = loadSetting('scoringModel')
+    if (fallback) saveSetting('loopScoringModel', fallback)
+  }
+
+  const setVal = (id, key) => {
+    const el = document.getElementById(id)
+    const v = loadSetting(key)
+    if (el && v != null) el.value = v
+  }
+  setVal('loopInterval', 'loopInterval')
+  setVal('loopMaxIterations', 'loopMaxIterations')
+  setVal('loopMaxHours', 'loopMaxHours')
+  setVal('loopMaxSeenStems', 'loopMaxSeenStems')
+  const scEn = document.getElementById('loopScoringEnabled')
+  if (scEn) scEn.checked = !!loadSetting('loopScoringEnabled')
+}
+
+function onLoopIntervalInput(val) {
+  const n = parseInt(val, 10)
+  const clamped = isNaN(n) ? 30 : Math.min(600, Math.max(10, n))
+  saveSetting('loopInterval', clamped)
+}
+function onLoopMaxIterationsInput(val) {
+  if (val === '' || val == null) { saveSetting('loopMaxIterations', null); return }
+  const n = parseInt(val, 10)
+  saveSetting('loopMaxIterations', isNaN(n) ? null : Math.max(1, n))
+}
+function onLoopMaxHoursInput(val) {
+  if (val === '' || val == null) { saveSetting('loopMaxHours', null); return }
+  const n = parseFloat(val)
+  saveSetting('loopMaxHours', isNaN(n) ? null : Math.max(0.1, n))
+}
+function onLoopMaxSeenStemsInput(val) {
+  const n = parseInt(val, 10)
+  const clamped = isNaN(n) ? 200 : Math.min(2000, Math.max(50, n))
+  saveSetting('loopMaxSeenStems', clamped)
+}
+function onLoopCreativeModelChange(val) { saveSetting('loopCreativeModel', val); updatePresetAvailability() }
+function onLoopScoringModelChange(val) { saveSetting('loopScoringModel', val); updatePresetAvailability() }
+function onLoopCreativePresetChange(val) { saveSetting('loopCreativePreset', val); updateCostBadge('loopCreative') }
+function onLoopScoringPresetChange(val) { saveSetting('loopScoringPreset', val); updateCostBadge('loopScoring') }
+function onLoopScoringEnabledChange(checked) { saveSetting('loopScoringEnabled', !!checked) }
+function onLoopActiveIdeaChange(val) { saveSetting('loopActiveIdea', val || null) }
+function onLoopActivePromptChange(val) { saveSetting('loopActivePrompt', val || null) }
+
+function onLoopToggle() {
+  if (_loopActive) { stopLoop(); return }
+  const apiKey = loadSetting('aiApiKey')
+  if (!apiKey) { alert('Set an API key first'); return }
+  const creativePreset = loadSetting('loopCreativePreset') || 'off'
+  const scoringPreset = loadSetting('loopScoringPreset') || 'off'
+  const scoringEnabled = loadSetting('loopScoringEnabled') || false
+  if (creativePreset === 'max' || (scoringEnabled && scoringPreset === 'max')) {
+    if (!confirm('Loop mode with Max preset can cost $100+ overnight. Continue?')) return
+  }
+  startLoop()
+}
+
+function startLoop() {
+  _loopActive = true
+  _loopStartTime = Date.now()
+  _loopIteration = 0
+  _loopFoundCount = 0
+  _loopRunId = 'loop_' + Date.now()
+  _loopController = new AbortController()
+  const btn = document.getElementById('loopStartStop')
+  if (btn) {
+    btn.textContent = 'Stop Loop'
+    btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700')
+    btn.classList.add('bg-red-600', 'hover:bg-red-700')
+  }
+  const status = document.getElementById('loopStatus')
+  if (status) status.classList.remove('hidden')
+  _loopStatusTimer = setInterval(updateLoopStatus, 1000)
+  updateLoopStatus()
+  refreshLoopEventLog()
+  loopTick()
+}
+
+function stopLoop() {
+  _loopActive = false
+  if (_loopController) { try { _loopController.abort() } catch {} }
+  if (_loopStatusTimer) { clearInterval(_loopStatusTimer); _loopStatusTimer = null }
+  const btn = document.getElementById('loopStartStop')
+  if (btn) {
+    btn.textContent = 'Start Loop'
+    btn.classList.remove('bg-red-600', 'hover:bg-red-700')
+    btn.classList.add('bg-indigo-600', 'hover:bg-indigo-700')
+  }
+  toast('Loop stopped after ' + _loopIteration + ' iterations, found ' + _loopFoundCount + ' domains')
+}
+
+async function loopTick() {
+  while (_loopActive) {
+    const maxIter = loadSetting('loopMaxIterations')
+    const maxHours = loadSetting('loopMaxHours')
+    if (maxIter && _loopIteration >= maxIter) { stopLoop(); return }
+    if (maxHours && (Date.now() - _loopStartTime) / 3600000 >= maxHours) { stopLoop(); return }
+
+    const start = Date.now()
+    try {
+      await runOneLoopIteration()
+    } catch (e) {
+      logLoopIteration({ timestamp: new Date().toISOString(), iteration: _loopIteration, error: String(e) })
+      console.error('Loop iteration failed', e)
+    }
+    _loopIteration++
+    const elapsed = (Date.now() - start) / 1000
+    const interval = Math.max(10, loadSetting('loopInterval') || 30)
+    const wait = Math.max(0, interval - elapsed)
+    if (_loopActive && wait > 0) await sleep(wait * 1000)
+  }
+}
+
+async function runOneLoopIteration() {
+  const apiKey = loadSetting('aiApiKey')
+  const model = loadSetting('loopCreativeModel') || loadSetting('creativeModel')
+  const preset = loadSetting('loopCreativePreset') || 'off'
+  const batchSize = loadSetting('batchSize') || 60
+  const maxSeen = loadSetting('loopMaxSeenStems') || 200
+  const ideaId = loadSetting('loopActiveIdea')
+  const promptId = loadSetting('loopActivePrompt')
+
+  const idea = ideaId ? lib.ideas.get(ideaId)?.text : loadSetting('description')
+  if (!idea) throw new Error('No active idea')
+
+  const customPrompt = promptId ? lib.prompts.get('generation', promptId)?.text : null
+  const seen = db.getSeenStems()
+  const seenSlice = seen.slice(-maxSeen).join(', ')
+
+  let finalPrompt = null
+  if (customPrompt) {
+    finalPrompt = customPrompt.includes('{{seen}}')
+      ? customPrompt.replaceAll('{{seen}}', seenSlice)
+      : (seenSlice ? customPrompt + '\n\nDo NOT repeat any of these previously-generated stems: ' + seenSlice : customPrompt)
+  }
+  const ideaWithSeen = (!customPrompt && seenSlice)
+    ? idea + '\n\nDo NOT repeat any of these previously-generated stems: ' + seenSlice
+    : idea
+
+  const names = await generateDomainNames(ideaWithSeen, finalPrompt || undefined, apiKey, model, batchSize, preset)
+  const seenSet = new Set(seen)
+  const fresh = names.filter(n => !seenSet.has(n))
+  db.addSeenStems(names)
+
+  const zones = getSelectedZones()
+  const tasks = fresh.flatMap(name => zones.map(z => name + '.' + z))
+  const available = []
+  const CONCURRENCY = 6
+  let nextIdx = 0
+  const worker = async () => {
+    while (_loopActive) {
+      const i = nextIdx++
+      if (i >= tasks.length) return
+      const domain = tasks[i]
+      let isAvail
+      try {
+        isAvail = await checkDomainAvailable(domain, _loopController.signal)
+      } catch (e) {
+        if (_loopController?.signal.aborted) return
+        throw e
+      }
+      db.upsert(
+        domain,
+        { domain, available: isAvail, description: idea, loopRunId: _loopRunId },
+        { available: isAvail, description: idea, loopRunId: _loopRunId }
+      )
+      if (isAvail === true) available.push(domain)
+    }
+  }
+  if (tasks.length) {
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker))
+  }
+
+  _loopFoundCount += available.length
+
+  if (loadSetting('loopScoringEnabled') && available.length) {
+    const scoringModel = loadSetting('loopScoringModel') || loadSetting('scoringModel')
+    const scoringPreset = loadSetting('loopScoringPreset') || 'off'
+    try {
+      const scores = await scoreFitBatch(available, idea, apiKey, null, scoringModel, scoringPreset)
+      for (const [domain, s] of Object.entries(scores || {})) {
+        const rec = db.findUnique(domain)
+        if (rec) db.update(rec.id, { fitScore: s.fit, proScore: s.pro, memScore: s.mem, brdScore: s.brd })
+      }
+    } catch (e) {
+      console.error('Loop scoring failed', e)
+    }
+  }
+
+  logLoopIteration({
+    timestamp: new Date().toISOString(),
+    iteration: _loopIteration,
+    runId: _loopRunId,
+    generated: names.length,
+    fresh: fresh.length,
+    checked: tasks.length,
+    available: available.length,
+    model,
+    preset,
+  })
+
+  try { loadSaved() } catch {}
+  setTimeout(refreshLoopEventLog, 500)
+}
+
+function updateLoopStatus() {
+  if (!_loopActive) return
+  const el = document.getElementById('loopStatus')
+  if (!el) return
+  const seenCount = db.getSeenStems().length
+  const maxIter = loadSetting('loopMaxIterations')
+  const elapsed = Math.floor((Date.now() - _loopStartTime) / 1000)
+  const hrs = Math.floor(elapsed / 3600)
+  const mins = Math.floor((elapsed % 3600) / 60)
+  const secs = elapsed % 60
+  const elapsedStr = hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + 'm ' + secs + 's'
+  el.textContent = 'Running — iteration ' + _loopIteration + '/' + (maxIter || '∞') +
+    ', found ' + _loopFoundCount + ' / ' + seenCount + ' seen, started ' + elapsedStr + ' ago'
+}
+
+async function refreshLoopEventLog() {
+  if (!_loopStartTime) return
+  const sinceIso = new Date(_loopStartTime).toISOString()
+  try {
+    const lines = await fetchLoopLog(sinceIso)
+    const el = document.getElementById('loopEventLog')
+    if (!el) return
+    const last20 = lines.slice(-20)
+    el.innerHTML = ''
+    for (const l of last20) {
+      const div = document.createElement('div')
+      const t = (l.timestamp || '').slice(11, 19)
+      const errPart = l.error ? ' ERROR: ' + l.error : ''
+      div.textContent = '[' + t + '] iter#' + l.iteration + ': gen=' + (l.generated || 0) +
+        ' fresh=' + (l.fresh || 0) + ' avail=' + (l.available || 0) + errPart
+      el.appendChild(div)
+    }
+  } catch {}
+}
+
+function onExportAvailable() {
+  const records = db.findMany().filter(r => r.available === true)
+  const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'available-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 // --- Init ---
 async function init() {
   await hydrate()
@@ -1690,11 +2001,13 @@ async function init() {
   populatePromptPicker('scoring')
   populatePromptPicker('synonym')
   populatePromptPicker('association')
+  loadLoopSettings()
+  populateLoopPickers()
   loadSaved()
   checkActiveSearch()
 
   // Restore collapsed states
-  ;['search', 'score', 'saved', 'history'].forEach(restoreSectionCollapse)
+  ;['search', 'score', 'saved', 'history', 'loop'].forEach(restoreSectionCollapse)
 }
 init()
 
@@ -1772,4 +2085,17 @@ Object.assign(window, {
   onAssociationPromptSave,
   onAssociationPromptUpdate,
   onAssociationPromptDelete,
+  onLoopToggle,
+  onExportAvailable,
+  onLoopIntervalInput,
+  onLoopMaxIterationsInput,
+  onLoopMaxHoursInput,
+  onLoopMaxSeenStemsInput,
+  onLoopCreativeModelChange,
+  onLoopScoringModelChange,
+  onLoopCreativePresetChange,
+  onLoopScoringPresetChange,
+  onLoopScoringEnabledChange,
+  onLoopActiveIdeaChange,
+  onLoopActivePromptChange,
 })

@@ -63,6 +63,128 @@
 
     <div class="flex flex-col gap-6">
 
+      <!-- Loop Mode -->
+      <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-indigo-50 border-b border-indigo-200 cursor-pointer select-none flex items-center justify-between" onclick="toggleSectionCollapse('loop')">
+          <h2 class="text-lg font-bold text-indigo-800">Loop Mode <span class="text-indigo-400 font-normal text-xs ml-2">unattended overnight search</span></h2>
+          <span id="loopCollapseIcon" class="text-indigo-400 text-2xl leading-none font-bold select-none">▾</span>
+        </div>
+        <div id="loopBody" class="p-6 space-y-4">
+          <!-- Big Start/Stop button -->
+          <div class="flex flex-wrap items-center gap-3">
+            <button id="loopStartStop" onclick="onLoopToggle()"
+              class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-base px-8 py-3 rounded-lg transition-colors">
+              Start Loop
+            </button>
+            <button onclick="onExportAvailable()"
+              class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors">
+              Export Available Domains as JSON
+            </button>
+          </div>
+
+          <!-- Live status panel -->
+          <div id="loopStatus" class="hidden text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-2"></div>
+
+          <!-- Mini event log -->
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Recent iterations</label>
+            <div id="loopEventLog" class="text-[11px] font-mono text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 max-h-40 overflow-y-auto leading-5"></div>
+          </div>
+
+          <!-- Settings -->
+          <div class="border-t border-gray-100 pt-4 space-y-3">
+            <!-- Row 1: schedule -->
+            <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Interval (seconds)</label>
+                <input id="loopInterval" type="number" min="10" max="600" value="30"
+                  oninput="onLoopIntervalInput(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                <p class="text-[11px] text-gray-400 mt-0.5">Min gap between iterations</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Max iterations</label>
+                <input id="loopMaxIterations" type="number" min="1" placeholder="unlimited"
+                  oninput="onLoopMaxIterationsInput(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                <p class="text-[11px] text-gray-400 mt-0.5">Blank = unlimited</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Max hours</label>
+                <input id="loopMaxHours" type="number" min="0.1" step="0.1" placeholder="unlimited"
+                  oninput="onLoopMaxHoursInput(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                <p class="text-[11px] text-gray-400 mt-0.5">Blank = unlimited</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Max seen stems</label>
+                <input id="loopMaxSeenStems" type="number" min="50" max="2000" value="200"
+                  oninput="onLoopMaxSeenStemsInput(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                <p class="text-[11px] text-gray-400 mt-0.5">Avoid-list cap (50–2000)</p>
+              </div>
+            </div>
+
+            <!-- Row 2: generation model + preset -->
+            <div class="flex items-center gap-2 flex-wrap">
+              <label class="text-xs font-medium text-gray-500 w-32 shrink-0">Generation model</label>
+              <select id="loopCreativeModel" onchange="onLoopCreativeModelChange(this.value)"
+                class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
+              </select>
+              <select id="loopCreativePreset" onchange="onLoopCreativePresetChange(this.value)"
+                class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                <option value="off">Off (cheapest)</option>
+                <option value="balanced">Balanced</option>
+                <option value="max">Max</option>
+              </select>
+              <span id="loopCreativeCostBadge" class="text-base" title="Cost tier">🟢</span>
+            </div>
+            <p class="text-[11px] text-gray-400 ml-32">Model + thinking preset used per loop iteration for generation.</p>
+
+            <!-- Row 3: scoring enabled + model + preset -->
+            <div class="flex items-center gap-2 flex-wrap">
+              <label class="text-xs font-medium text-gray-500 w-32 shrink-0 flex items-center gap-2">
+                <input type="checkbox" id="loopScoringEnabled" onchange="onLoopScoringEnabledChange(this.checked)" class="accent-indigo-600">
+                Scoring
+              </label>
+              <select id="loopScoringModel" onchange="onLoopScoringModelChange(this.value)"
+                class="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                <option value="claude-opus-4-7">Claude Opus 4.7 (default)</option>
+              </select>
+              <select id="loopScoringPreset" onchange="onLoopScoringPresetChange(this.value)"
+                class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                <option value="off">Off (cheapest)</option>
+                <option value="balanced">Balanced</option>
+                <option value="max">Max</option>
+              </select>
+              <span id="loopScoringCostBadge" class="text-base" title="Cost tier">🟢</span>
+            </div>
+            <p class="text-[11px] text-gray-400 ml-32">Optional. Off by default — overnight scoring is wasteful.</p>
+
+            <!-- Row 4: active idea + active prompt -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Active idea</label>
+                <select id="loopActiveIdea" onchange="onLoopActiveIdeaChange(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                  <option value="">— Use current description —</option>
+                </select>
+                <p class="text-[11px] text-gray-400 mt-0.5">Pick a saved idea or use the current textarea value.</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Active generation prompt</label>
+                <select id="loopActivePrompt" onchange="onLoopActivePromptChange(this.value)"
+                  class="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white">
+                  <option value="">— Use default —</option>
+                </select>
+                <p class="text-[11px] text-gray-400 mt-0.5">Use <span class="font-mono">{{seen}}</span> placeholder to inject avoid-list.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ROW 1: Search + Quick Check -->
       <div id="row1Grid" class="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
 
