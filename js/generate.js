@@ -337,10 +337,27 @@ export async function generateDomainNames(description, systemPrompt, apiKey, mod
 
   if (!text) throw new Error('Empty response from AI')
 
-  const names = extractJson(text)
+  let names = extractJson(text)
+  // Defensive: many models wrap output in an envelope despite the prompt
+  // ("Return ONLY a JSON array"). Unwrap common shapes like
+  // {names: [...]}, {domains: [...]}, {results: [...]}, etc.
+  if (names && !Array.isArray(names) && typeof names === 'object') {
+    const arrayKeys = ['names', 'domains', 'results', 'items', 'array', 'list', 'data', 'candidates']
+    for (const k of arrayKeys) {
+      if (Array.isArray(names[k])) { names = names[k]; break }
+    }
+    // If still not an array, try any property that's an array.
+    if (!Array.isArray(names)) {
+      const firstArrayVal = Object.values(names).find(v => Array.isArray(v))
+      if (firstArrayVal) names = firstArrayVal
+    }
+  }
   if (!Array.isArray(names)) {
-    console.error('extractJson did not return an array. Response preview (first 800 chars):\n', text.slice(0, 800), '\n...end (last 400 chars):\n', text.slice(-400))
-    throw new Error('Could not parse AI response as JSON array')
+    console.error('extractJson did not return an array. Full response below:')
+    console.error(text)
+    const tail = text.slice(-300).replace(/\s+/g, ' ').trim()
+    const head = text.slice(0, 200).replace(/\s+/g, ' ').trim()
+    throw new Error('Could not parse AI response as JSON array. Response head: "' + head + '" ... tail: "' + tail + '"')
   }
   return names
     .map(n => String(n).toLowerCase().replace(/[^a-z0-9]/g, ''))
