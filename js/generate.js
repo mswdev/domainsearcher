@@ -12,35 +12,56 @@ export class AIAPIError extends Error {
 let _lastUsage = null
 export function getLastUsage() { return _lastUsage }
 
+// Extract the largest valid JSON value from a model response. Handles model
+// outputs that prepend a <scratch> block or other commentary, or include
+// incidental bracketed text like "Lane [A]" / "[from Latin]" inside reasoning.
+// Strategy: try a direct parse first (fast path), otherwise scan the entire
+// string for ALL balanced {...} and [...] candidates, try to parse each, and
+// return the longest valid one. The real output (60-item array, score map)
+// will always be substantially larger than any incidental JSON-like fragment.
 function extractJson(text) {
   if (!text) return null
   let s = text.trim()
   const fenced = s.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/i)
   if (fenced) s = fenced[1].trim()
   try { return JSON.parse(s) } catch {}
-  const startIdx = s.search(/[\{\[]/)
-  if (startIdx === -1) return null
-  const open = s[startIdx]
-  const close = open === '{' ? '}' : ']'
-  let depth = 0
-  let inStr = false
-  let esc = false
-  for (let i = startIdx; i < s.length; i++) {
+
+  let best = null
+  let bestLen = -1
+  let i = 0
+  while (i < s.length) {
     const c = s[i]
-    if (esc) { esc = false; continue }
-    if (c === '\\') { esc = true; continue }
-    if (c === '"') { inStr = !inStr; continue }
-    if (inStr) continue
-    if (c === open) depth++
-    else if (c === close) {
-      depth--
-      if (depth === 0) {
-        const slice = s.slice(startIdx, i + 1)
-        try { return JSON.parse(slice) } catch { return null }
+    if (c !== '{' && c !== '[') { i++; continue }
+    const open = c
+    const close = open === '{' ? '}' : ']'
+    let depth = 0
+    let inStr = false
+    let esc = false
+    let end = -1
+    for (let j = i; j < s.length; j++) {
+      const cj = s[j]
+      if (esc) { esc = false; continue }
+      if (cj === '\\') { esc = true; continue }
+      if (cj === '"') { inStr = !inStr; continue }
+      if (inStr) continue
+      if (cj === open) depth++
+      else if (cj === close) {
+        depth--
+        if (depth === 0) { end = j; break }
       }
     }
+    if (end === -1) break // unclosed bracket — no more candidates
+    const slice = s.slice(i, end + 1)
+    try {
+      const parsed = JSON.parse(slice)
+      if (slice.length > bestLen) {
+        best = parsed
+        bestLen = slice.length
+      }
+    } catch {}
+    i = end + 1
   }
-  return null
+  return best
 }
 
 // Bundled API key — XOR-encoded at build time so GitHub secret scanning won't flag it
@@ -317,7 +338,10 @@ export async function generateDomainNames(description, systemPrompt, apiKey, mod
   if (!text) throw new Error('Empty response from AI')
 
   const names = extractJson(text)
-  if (!Array.isArray(names)) throw new Error('Could not parse AI response as JSON array')
+  if (!Array.isArray(names)) {
+    console.error('extractJson did not return an array. Response preview (first 800 chars):\n', text.slice(0, 800), '\n...end (last 400 chars):\n', text.slice(-400))
+    throw new Error('Could not parse AI response as JSON array')
+  }
   return names
     .map(n => String(n).toLowerCase().replace(/[^a-z0-9]/g, ''))
     .filter(n => n.length >= 2)
