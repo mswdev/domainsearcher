@@ -12,6 +12,16 @@ export class AIAPIError extends Error {
 let _lastUsage = null
 export function getLastUsage() { return _lastUsage }
 
+// Stop reason from the most recent aiChat call. Used by parsers to detect
+// truncation and surface a better error message ("ran out of tokens during
+// scratch reasoning") instead of a generic "could not parse JSON array".
+let _lastStopReason = null
+export function getLastStopReason() { return _lastStopReason }
+// Anthropic uses 'max_tokens'; OpenAI uses 'length'. Both mean truncated.
+function _isTruncatedStop(reason) {
+  return reason === 'max_tokens' || reason === 'length'
+}
+
 // Extract the largest valid JSON value from a model response. Handles model
 // outputs that prepend a <scratch> block or other commentary, or include
 // incidental bracketed text like "Lane [A]" / "[from Latin]" inside reasoning.
@@ -85,8 +95,8 @@ function buildAnthropicBody(model, preset, system, userMsgs, temperature) {
   // Opus 4.7 is ALWAYS adaptive; effort maps to low/medium/xhigh per preset.
   if (model === 'claude-opus-4-7') {
     let effort, maxTokens
-    if (preset === 'balanced') { effort = 'medium'; maxTokens = 16000 }
-    else if (preset === 'max') { effort = 'xhigh'; maxTokens = 24000 }
+    if (preset === 'balanced') { effort = 'medium'; maxTokens = 24000 }
+    else if (preset === 'max') { effort = 'xhigh'; maxTokens = 32000 }
     else { effort = 'low'; maxTokens = 4096 }
     return { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort } }
     // No temperature ever — opus-4-7 rejects it with 400.
@@ -106,15 +116,17 @@ function buildAnthropicBody(model, preset, system, userMsgs, temperature) {
     return body
   }
   if (preset === 'balanced') {
-    const body = { ...base, max_tokens: 16000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
+    // 24K gives headroom for heavy custom prompts (scratch blocks, long
+    // reasoning passes) that previously truncated at 16K.
+    const body = { ...base, max_tokens: 24000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
   if (preset === 'max') {
     let maxTokens
-    if (model === 'claude-opus-4-6') maxTokens = 20000
-    else if (model === 'claude-sonnet-4-6') maxTokens = 16000
-    else maxTokens = 16000
+    if (model === 'claude-opus-4-6') maxTokens = 32000
+    else if (model === 'claude-sonnet-4-6') maxTokens = 24000
+    else maxTokens = 24000
     const body = { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort: 'max' } }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
@@ -210,6 +222,7 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal, temperatu
   // raced past via withElapsedStatus) can't carry stale tokens into the next
   // trackCost() read.
   _lastUsage = null
+  _lastStopReason = null
 
   const route = providerForModel(model)
   const resolvedModel = model || (route === 'anthropic' ? 'claude-opus-4-6' : route === 'openai' ? 'gpt-4o-mini' : BUNDLED_MODEL)
@@ -245,10 +258,12 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal, temperatu
     })
     if (!res.ok) {
       _lastUsage = null
+      _lastStopReason = null
       throw new AIAPIError(res.status, await res.text())
     }
     const data = await res.json()
     _lastUsage = data.usage || null
+    _lastStopReason = data.stop_reason || null
     const textBlock = data.content?.find(b => b.type === 'text')
     if (!textBlock?.text) {
       console.error('Anthropic returned no text block', { stop_reason: data.stop_reason, usage: data.usage, content_types: data.content?.map(b => b.type) })
@@ -282,6 +297,7 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal, temperatu
   })
   if (!res.ok) {
     _lastUsage = null
+    _lastStopReason = null
     throw new AIAPIError(res.status, await res.text())
   }
   const data = await res.json()
@@ -296,6 +312,7 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal, temperatu
   } else {
     _lastUsage = null
   }
+  _lastStopReason = data.choices?.[0]?.finish_reason || null
   return data.choices?.[0]?.message?.content || ''
 }
 
@@ -353,8 +370,12 @@ export async function generateDomainNames(description, systemPrompt, apiKey, mod
     }
   }
   if (!Array.isArray(names)) {
-    console.error('extractJson did not return an array. Full response below:')
+    const stopReason = getLastStopReason()
+    console.error('extractJson did not return an array. stop_reason:', stopReason, '\nFull response below:')
     console.error(text)
+    if (_isTruncatedStop(stopReason)) {
+      throw new Error('Response truncated by max_tokens limit (stop_reason: ' + stopReason + '). The model ran out of room before emitting the JSON array — likely consumed by a verbose scratch/reasoning pass. Try the Max preset, shorten the scratch requirement in your prompt, or simplify the prompt.')
+    }
     const tail = text.slice(-300).replace(/\s+/g, ' ').trim()
     const head = text.slice(0, 200).replace(/\s+/g, ' ').trim()
     throw new Error('Could not parse AI response as JSON array. Response head: "' + head + '" ... tail: "' + tail + '"')
