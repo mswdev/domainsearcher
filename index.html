@@ -562,10 +562,6 @@
                   oninput="onSavedFilterChange()"
                   class="w-14 border border-green-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-400">d
               </label>
-              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap" title="Collapse stems that differ only by TLD (keep the .com if available)">
-                <input id="savedFilterDedup" type="checkbox" onchange="onSavedFilterChange()"
-                  class="w-3.5 h-3.5 accent-green-500"> Dedup stems
-              </label>
               <button onclick="clearSavedFilters()" class="text-gray-400 hover:text-red-500 text-xs">clear</button>
               <span id="savedFilterStatus" class="text-gray-500 text-xs ml-auto"></span>
             </div>
@@ -625,11 +621,6 @@
                   oninput="onHistoryFilterChange()"
                   class="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-400">d
               </label>
-              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap" title="Collapse stems that differ only by TLD (keep the newest)">
-                <input id="historyFilterDedup" type="checkbox" onchange="onHistoryFilterChange()"
-                  class="w-3.5 h-3.5 accent-cyan-500"> Dedup stems
-              </label>
-              <button onclick="purgeDuplicateStems()" class="text-xs text-red-400 hover:text-red-600" title="Permanently delete older duplicate-stem rows from the database">purge dupes</button>
               <button onclick="clearHistoryFilters()" class="text-gray-400 hover:text-red-500 text-xs">clear</button>
               <span id="historyFilterStatus" class="text-gray-500 text-xs ml-auto"></span>
             </div>
@@ -707,6 +698,6 @@
     </div>
   </footer>
 
-  <script type="module" src="js/app.js?v=32"></script>
+  <script type="module" src="js/app.js?v=33"></script>
 </body>
 </html>

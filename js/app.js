@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=32'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=32'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=32'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=33'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=33'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=33'
 
 // Active search controller
 let _abortController = null
@@ -823,8 +823,8 @@ let _historyCurrentPage = 0
 
 // Filter state — preserved across re-renders. Updated by the on*FilterChange
 // handlers and consumed by applySavedFilters / applyHistoryFilters in loadSaved.
-const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false }
-const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false, avail: 'all', favOnly: false }
+const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null }
+const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false }
 
 function _stemOf(domain) { return domain.replace(/\.[a-z]+$/, '') }
 
@@ -843,29 +843,12 @@ function _matchesFilter(d, f) {
   return true
 }
 
-// Collapse rows that share a stem; keep the newest one (or the .com if all same age)
-function _dedupByStem(list) {
-  const byStem = new Map()
-  for (const d of list) {
-    const stem = _stemOf(d.domain)
-    const prev = byStem.get(stem)
-    if (!prev) { byStem.set(stem, d); continue }
-    const dTs = d.checkedAt ? new Date(d.checkedAt).getTime() : 0
-    const pTs = prev.checkedAt ? new Date(prev.checkedAt).getTime() : 0
-    if (dTs > pTs) byStem.set(stem, d)
-    else if (dTs === pTs && d.domain.endsWith('.com') && !prev.domain.endsWith('.com')) byStem.set(stem, d)
-  }
-  return Array.from(byStem.values())
-}
-
 function applySavedFilters(list) {
-  let out = list.filter(d => _matchesFilter(d, _savedFilter))
-  if (_savedFilter.dedup) out = _dedupByStem(out)
-  return out
+  return list.filter(d => _matchesFilter(d, _savedFilter))
 }
 
 function applyHistoryFilters(list) {
-  let out = list.filter(d => {
+  return list.filter(d => {
     if (!_matchesFilter(d, _historyFilter)) return false
     if (_historyFilter.favOnly && !d.favorite) return false
     const a = d.available
@@ -876,41 +859,6 @@ function applyHistoryFilters(list) {
       default: return true
     }
   })
-  if (_historyFilter.dedup) out = _dedupByStem(out)
-  return out
-}
-
-function purgeDuplicateStems() {
-  const all = db.findMany()
-  const groups = new Map()
-  for (const d of all) {
-    const stem = _stemOf(d.domain)
-    if (!groups.has(stem)) groups.set(stem, [])
-    groups.get(stem).push(d)
-  }
-  const toDelete = []
-  for (const arr of groups.values()) {
-    if (arr.length < 2) continue
-    arr.sort((a, b) => {
-      const at = a.checkedAt ? new Date(a.checkedAt).getTime() : 0
-      const bt = b.checkedAt ? new Date(b.checkedAt).getTime() : 0
-      if (bt !== at) return bt - at
-      // tie-breaker: prefer .com
-      if (a.domain.endsWith('.com') !== b.domain.endsWith('.com')) return a.domain.endsWith('.com') ? -1 : 1
-      return 0
-    })
-    // Keep arr[0], delete the rest
-    for (let i = 1; i < arr.length; i++) {
-      // Don't purge favorites — user explicitly cared about them
-      if (arr[i].favorite || arr[i].superFavorite) continue
-      toDelete.push(arr[i].id)
-    }
-  }
-  if (!toDelete.length) { toast('No duplicate stems to purge'); return }
-  if (!confirm('Permanently delete ' + toDelete.length + ' duplicate-stem rows? (Favorites are preserved.)')) return
-  for (const id of toDelete) db.delete(id)
-  toast('Purged ' + toDelete.length + ' duplicates')
-  loadSaved()
 }
 
 function _parseDays(el) { const v = el && el.value; return v ? parseFloat(v) : null }
@@ -922,7 +870,6 @@ function onSavedFilterChange() {
   _savedFilter.maxLen = _parseDays(document.getElementById('savedFilterMaxLen'))
   _savedFilter.newerDays = _parseDays(document.getElementById('savedFilterNewerDays'))
   _savedFilter.olderDays = _parseDays(document.getElementById('savedFilterOlderDays'))
-  _savedFilter.dedup = document.getElementById('savedFilterDedup').checked
   _savedAvailCurrentPage = 0
   loadSaved()
 }
@@ -936,29 +883,26 @@ function onHistoryFilterChange() {
   _historyFilter.maxLen = _parseDays(document.getElementById('historyFilterMaxLen'))
   _historyFilter.newerDays = _parseDays(document.getElementById('historyFilterNewerDays'))
   _historyFilter.olderDays = _parseDays(document.getElementById('historyFilterOlderDays'))
-  _historyFilter.dedup = document.getElementById('historyFilterDedup').checked
   _historyCurrentPage = 0
   loadSaved()
 }
 
 function clearSavedFilters() {
-  Object.assign(_savedFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false })
+  Object.assign(_savedFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null })
   for (const id of ['savedFilterText', 'savedFilterMinLen', 'savedFilterMaxLen', 'savedFilterNewerDays', 'savedFilterOlderDays']) {
     const el = document.getElementById(id); if (el) el.value = ''
   }
-  for (const id of ['savedFilterNoNums', 'savedFilterDedup']) {
-    const el = document.getElementById(id); if (el) el.checked = false
-  }
+  const nn = document.getElementById('savedFilterNoNums'); if (nn) nn.checked = false
   _savedAvailCurrentPage = 0
   loadSaved()
 }
 
 function clearHistoryFilters() {
-  Object.assign(_historyFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false, avail: 'all', favOnly: false })
+  Object.assign(_historyFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false })
   for (const id of ['historyFilterText', 'historyFilterMinLen', 'historyFilterMaxLen', 'historyFilterNewerDays', 'historyFilterOlderDays']) {
     const el = document.getElementById(id); if (el) el.value = ''
   }
-  for (const id of ['historyFilterNoNums', 'historyFilterFav', 'historyFilterDedup']) {
+  for (const id of ['historyFilterNoNums', 'historyFilterFav']) {
     const el = document.getElementById(id); if (el) el.checked = false
   }
   const av = document.getElementById('historyFilterAvail'); if (av) av.value = 'all'
@@ -2513,7 +2457,6 @@ Object.assign(window, {
   onHistoryFilterChange,
   clearSavedFilters,
   clearHistoryFilters,
-  purgeDuplicateStems,
   onExportAvailable,
   onLoopIntervalInput,
   onLoopMaxIterationsInput,
