@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=31'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=31'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=31'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=32'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=32'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=32'
 
 // Active search controller
 let _abortController = null
@@ -337,6 +337,17 @@ function toggleSuper(id) {
   loadSaved()
 }
 
+function fmtAgo(iso) {
+  if (!iso) return ''
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000
+  if (diff < 60) return Math.floor(diff) + 's'
+  if (diff < 3600) return Math.floor(diff / 60) + 'm'
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h'
+  if (diff < 86400 * 7) return Math.floor(diff / 86400) + 'd'
+  if (diff < 86400 * 30) return Math.floor(diff / (86400 * 7)) + 'w'
+  return Math.floor(diff / (86400 * 30)) + 'mo'
+}
+
 function domainRow(d, opts = {}) {
   const badge = opts.noBadge ? '' : (d.available === true
     ? '<span class="text-green-600 text-xs font-medium">✓</span>'
@@ -353,6 +364,10 @@ function domainRow(d, opts = {}) {
   const desc = opts.showDesc && d.description
     ? '<span class="text-xs text-gray-400 ml-3">' + d.description.slice(0, 40) + '</span>'
     : ''
+  const ts = d.checkedAt
+  const tsCell = ts
+    ? '<span class="text-xs text-gray-300 font-mono ml-2 whitespace-nowrap" title="' + new Date(ts).toLocaleString() + '">' + fmtAgo(ts) + '</span>'
+    : ''
   const nameClass = d.available === true ? (opts.bold ? 'text-green-800 font-semibold' : 'text-green-700 font-semibold text-sm') : 'text-gray-400 text-sm'
   const rowBg = d.superFavorite && opts.showSuper ? ' bg-orange-50' : ''
   const zonesId = opts.showZones ? 'zones-' + d.id : ''
@@ -362,7 +377,7 @@ function domainRow(d, opts = {}) {
   return '<div class="' + (opts.compact ? 'px-3' : 'px-6') + rowBg + ' ' + (opts.compact ? 'py-2' : 'pt-3 ' + (opts.showZones ? 'pb-1' : 'pb-3')) + '">'
     + '<div class="flex items-center justify-between">'
     + '<div><span class="font-mono ' + nameClass + '">' + d.domain + '</span>' + desc + '</div>'
-    + '<div class="flex items-center gap-2">' + superStar + star + badge + del + '</div>'
+    + '<div class="flex items-center gap-2">' + superStar + star + badge + tsCell + del + '</div>'
     + '</div></div>' + zonesRow
 }
 
@@ -808,8 +823,8 @@ let _historyCurrentPage = 0
 
 // Filter state — preserved across re-renders. Updated by the on*FilterChange
 // handlers and consumed by applySavedFilters / applyHistoryFilters in loadSaved.
-const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null }
-const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, avail: 'all', favOnly: false }
+const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false }
+const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false, avail: 'all', favOnly: false }
 
 function _stemOf(domain) { return domain.replace(/\.[a-z]+$/, '') }
 
@@ -819,13 +834,38 @@ function _matchesFilter(d, f) {
   if (f.noNums && /\d/.test(stem)) return false
   if (f.minLen != null && stem.length < f.minLen) return false
   if (f.maxLen != null && stem.length > f.maxLen) return false
+  if (f.newerDays != null || f.olderDays != null) {
+    const ts = d.checkedAt ? new Date(d.checkedAt).getTime() : 0
+    const ageDays = (Date.now() - ts) / 86400000
+    if (f.newerDays != null && ageDays > f.newerDays) return false
+    if (f.olderDays != null && ageDays < f.olderDays) return false
+  }
   return true
 }
 
-function applySavedFilters(list) { return list.filter(d => _matchesFilter(d, _savedFilter)) }
+// Collapse rows that share a stem; keep the newest one (or the .com if all same age)
+function _dedupByStem(list) {
+  const byStem = new Map()
+  for (const d of list) {
+    const stem = _stemOf(d.domain)
+    const prev = byStem.get(stem)
+    if (!prev) { byStem.set(stem, d); continue }
+    const dTs = d.checkedAt ? new Date(d.checkedAt).getTime() : 0
+    const pTs = prev.checkedAt ? new Date(prev.checkedAt).getTime() : 0
+    if (dTs > pTs) byStem.set(stem, d)
+    else if (dTs === pTs && d.domain.endsWith('.com') && !prev.domain.endsWith('.com')) byStem.set(stem, d)
+  }
+  return Array.from(byStem.values())
+}
+
+function applySavedFilters(list) {
+  let out = list.filter(d => _matchesFilter(d, _savedFilter))
+  if (_savedFilter.dedup) out = _dedupByStem(out)
+  return out
+}
 
 function applyHistoryFilters(list) {
-  return list.filter(d => {
+  let out = list.filter(d => {
     if (!_matchesFilter(d, _historyFilter)) return false
     if (_historyFilter.favOnly && !d.favorite) return false
     const a = d.available
@@ -836,15 +876,53 @@ function applyHistoryFilters(list) {
       default: return true
     }
   })
+  if (_historyFilter.dedup) out = _dedupByStem(out)
+  return out
 }
+
+function purgeDuplicateStems() {
+  const all = db.findMany()
+  const groups = new Map()
+  for (const d of all) {
+    const stem = _stemOf(d.domain)
+    if (!groups.has(stem)) groups.set(stem, [])
+    groups.get(stem).push(d)
+  }
+  const toDelete = []
+  for (const arr of groups.values()) {
+    if (arr.length < 2) continue
+    arr.sort((a, b) => {
+      const at = a.checkedAt ? new Date(a.checkedAt).getTime() : 0
+      const bt = b.checkedAt ? new Date(b.checkedAt).getTime() : 0
+      if (bt !== at) return bt - at
+      // tie-breaker: prefer .com
+      if (a.domain.endsWith('.com') !== b.domain.endsWith('.com')) return a.domain.endsWith('.com') ? -1 : 1
+      return 0
+    })
+    // Keep arr[0], delete the rest
+    for (let i = 1; i < arr.length; i++) {
+      // Don't purge favorites — user explicitly cared about them
+      if (arr[i].favorite || arr[i].superFavorite) continue
+      toDelete.push(arr[i].id)
+    }
+  }
+  if (!toDelete.length) { toast('No duplicate stems to purge'); return }
+  if (!confirm('Permanently delete ' + toDelete.length + ' duplicate-stem rows? (Favorites are preserved.)')) return
+  for (const id of toDelete) db.delete(id)
+  toast('Purged ' + toDelete.length + ' duplicates')
+  loadSaved()
+}
+
+function _parseDays(el) { const v = el && el.value; return v ? parseFloat(v) : null }
 
 function onSavedFilterChange() {
   _savedFilter.text = document.getElementById('savedFilterText').value.trim()
   _savedFilter.noNums = document.getElementById('savedFilterNoNums').checked
-  const minV = document.getElementById('savedFilterMinLen').value
-  const maxV = document.getElementById('savedFilterMaxLen').value
-  _savedFilter.minLen = minV ? parseInt(minV, 10) : null
-  _savedFilter.maxLen = maxV ? parseInt(maxV, 10) : null
+  _savedFilter.minLen = _parseDays(document.getElementById('savedFilterMinLen'))
+  _savedFilter.maxLen = _parseDays(document.getElementById('savedFilterMaxLen'))
+  _savedFilter.newerDays = _parseDays(document.getElementById('savedFilterNewerDays'))
+  _savedFilter.olderDays = _parseDays(document.getElementById('savedFilterOlderDays'))
+  _savedFilter.dedup = document.getElementById('savedFilterDedup').checked
   _savedAvailCurrentPage = 0
   loadSaved()
 }
@@ -854,33 +932,36 @@ function onHistoryFilterChange() {
   _historyFilter.noNums = document.getElementById('historyFilterNoNums').checked
   _historyFilter.avail = document.getElementById('historyFilterAvail').value
   _historyFilter.favOnly = document.getElementById('historyFilterFav').checked
-  const minV = document.getElementById('historyFilterMinLen').value
-  const maxV = document.getElementById('historyFilterMaxLen').value
-  _historyFilter.minLen = minV ? parseInt(minV, 10) : null
-  _historyFilter.maxLen = maxV ? parseInt(maxV, 10) : null
+  _historyFilter.minLen = _parseDays(document.getElementById('historyFilterMinLen'))
+  _historyFilter.maxLen = _parseDays(document.getElementById('historyFilterMaxLen'))
+  _historyFilter.newerDays = _parseDays(document.getElementById('historyFilterNewerDays'))
+  _historyFilter.olderDays = _parseDays(document.getElementById('historyFilterOlderDays'))
+  _historyFilter.dedup = document.getElementById('historyFilterDedup').checked
   _historyCurrentPage = 0
   loadSaved()
 }
 
 function clearSavedFilters() {
-  _savedFilter.text = ''; _savedFilter.noNums = false; _savedFilter.minLen = null; _savedFilter.maxLen = null
-  document.getElementById('savedFilterText').value = ''
-  document.getElementById('savedFilterNoNums').checked = false
-  document.getElementById('savedFilterMinLen').value = ''
-  document.getElementById('savedFilterMaxLen').value = ''
+  Object.assign(_savedFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false })
+  for (const id of ['savedFilterText', 'savedFilterMinLen', 'savedFilterMaxLen', 'savedFilterNewerDays', 'savedFilterOlderDays']) {
+    const el = document.getElementById(id); if (el) el.value = ''
+  }
+  for (const id of ['savedFilterNoNums', 'savedFilterDedup']) {
+    const el = document.getElementById(id); if (el) el.checked = false
+  }
   _savedAvailCurrentPage = 0
   loadSaved()
 }
 
 function clearHistoryFilters() {
-  _historyFilter.text = ''; _historyFilter.noNums = false; _historyFilter.minLen = null
-  _historyFilter.maxLen = null; _historyFilter.avail = 'all'; _historyFilter.favOnly = false
-  document.getElementById('historyFilterText').value = ''
-  document.getElementById('historyFilterNoNums').checked = false
-  document.getElementById('historyFilterAvail').value = 'all'
-  document.getElementById('historyFilterFav').checked = false
-  document.getElementById('historyFilterMinLen').value = ''
-  document.getElementById('historyFilterMaxLen').value = ''
+  Object.assign(_historyFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, dedup: false, avail: 'all', favOnly: false })
+  for (const id of ['historyFilterText', 'historyFilterMinLen', 'historyFilterMaxLen', 'historyFilterNewerDays', 'historyFilterOlderDays']) {
+    const el = document.getElementById(id); if (el) el.value = ''
+  }
+  for (const id of ['historyFilterNoNums', 'historyFilterFav', 'historyFilterDedup']) {
+    const el = document.getElementById(id); if (el) el.checked = false
+  }
+  const av = document.getElementById('historyFilterAvail'); if (av) av.value = 'all'
   _historyCurrentPage = 0
   loadSaved()
 }
@@ -2432,6 +2513,7 @@ Object.assign(window, {
   onHistoryFilterChange,
   clearSavedFilters,
   clearHistoryFilters,
+  purgeDuplicateStems,
   onExportAvailable,
   onLoopIntervalInput,
   onLoopMaxIterationsInput,
