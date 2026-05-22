@@ -299,6 +299,14 @@
                   <span id="scoringCostBadge" class="inline-flex items-center" title="Cost tier"></span>
                 </div>
                 <p class="text-[11px] text-gray-400 ml-24">Scoring — fit / pronounceability / memorability / brand. Off = no thinking. Balanced/Max bills thinking tokens at output rate.</p>
+                <div id="temperatureRow" class="flex items-center gap-2 flex-wrap">
+                  <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Temperature</label>
+                  <input id="temperatureSlider" type="range" min="0" max="1" step="0.05" value="0.7"
+                    oninput="onTemperatureChange(this.value)"
+                    class="flex-1 min-w-[140px] accent-cyan-500">
+                  <span id="temperatureValue" class="font-mono text-xs text-gray-600 w-10 text-right">0.70</span>
+                  <div class="basis-full text-[11px] text-gray-400 ml-24">Lower = focused, higher = creative. Hidden for reasoning models (which ignore temperature).</div>
+                </div>
                 <div class="flex items-center gap-2 flex-wrap">
                   <label class="text-xs font-medium text-gray-500 w-24 shrink-0">Names per search</label>
                   <input id="batchSize" type="number" min="10" max="200" step="10" value="60"
@@ -698,6 +706,6 @@
     </div>
   </footer>
 
-  <script type="module" src="js/app.js?v=33"></script>
+  <script type="module" src="js/app.js?v=34"></script>
 </body>
 </html>

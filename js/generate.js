@@ -58,25 +58,49 @@ export function detectProvider(key) {
   return 'Unknown'
 }
 
-function buildAnthropicBody(model, preset, system, userMsgs) {
+function buildAnthropicBody(model, preset, system, userMsgs, temperature) {
   const base = { model, system, messages: userMsgs }
-  if (preset === 'off') {
-    return { ...base, max_tokens: model.includes('haiku') ? 2048 : 4096 }
+
+  // Opus 4.7 is ALWAYS adaptive; effort maps to low/medium/xhigh per preset.
+  if (model === 'claude-opus-4-7') {
+    let effort, maxTokens
+    if (preset === 'balanced') { effort = 'medium'; maxTokens = 16000 }
+    else if (preset === 'max') { effort = 'xhigh'; maxTokens = 24000 }
+    else { effort = 'low'; maxTokens = 4096 }
+    return { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort } }
+    // No temperature ever — opus-4-7 rejects it with 400.
   }
-  if (preset === 'balanced') {
-    return { ...base, max_tokens: 16000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
-  }
-  if (preset === 'max') {
-    let maxTokens, effort
-    if (model === 'claude-opus-4-7') { maxTokens = 24000; effort = 'xhigh' }
-    else if (model === 'claude-opus-4-6') { maxTokens = 20000; effort = 'max' }
-    else if (model === 'claude-sonnet-4-6') { maxTokens = 16000; effort = 'max' }
-    else { maxTokens = 4096; effort = null }
-    const body = { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' } }
-    if (effort) body.output_config = { effort }
+
+  // Haiku 4.5: no adaptive, no effort, no output_config.
+  if (model.includes('haiku')) {
+    const body = { ...base, max_tokens: 2048 }
+    if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
-  return { ...base, max_tokens: 4096 }
+
+  // Opus 4.6 / Sonnet 4.6: adaptive + effort, per-preset.
+  if (preset === 'off') {
+    const body = { ...base, max_tokens: 4096 }
+    if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
+    return body
+  }
+  if (preset === 'balanced') {
+    const body = { ...base, max_tokens: 16000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
+    if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
+    return body
+  }
+  if (preset === 'max') {
+    let maxTokens
+    if (model === 'claude-opus-4-6') maxTokens = 20000
+    else if (model === 'claude-sonnet-4-6') maxTokens = 16000
+    else maxTokens = 16000
+    const body = { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort: 'max' } }
+    if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
+    return body
+  }
+  const body = { ...base, max_tokens: 4096 }
+  if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
+  return body
 }
 
 // Route by model prefix, not key prefix. Once users can save multiple keys,
@@ -89,42 +113,78 @@ export function providerForModel(model) {
 }
 
 // OpenAI reasoning-capable models — exposed in the UI for Balanced/Max presets.
-// gpt-5-nano is GPT-5 era but has no reasoning. gpt-4o family is legacy chat.
-function _isOpenAIReasoningModel(model) {
+// gpt-5, gpt-5.4, gpt-5.5 plus their -mini/-nano variants are all reasoning
+// models. o-series (o1, o3, o3-mini, o4-mini, ...) are all reasoning.
+// gpt-4o / gpt-4o-mini are legacy chat (NOT reasoning).
+export function _isOpenAIReasoningModel(model) {
   if (!model) return false
-  if (model.startsWith('gpt-5') && !model.includes('nano')) return true
+  if (/^gpt-5(\.\d+)?(-(mini|nano))?$/.test(model)) return true
   if (/^o\d/.test(model)) return true
   return false
 }
 
-function buildOpenAIBody(model, preset, messages) {
-  if (!_isOpenAIReasoningModel(model)) {
-    // Legacy chat (gpt-4o, gpt-4o-mini) or non-reasoning gpt-5-nano: classic shape
-    return { model, messages, max_tokens: 2048 }
-  }
-  // Reasoning model: max_completion_tokens covers BOTH reasoning + visible output
-  // combined (per OpenAI docs), and max_tokens is a 400 error. Effort param
-  // values are model-family-specific.
-  const body = { model, messages }
-  const is54_55 = model.startsWith('gpt-5.4') || model.startsWith('gpt-5.5')
+// Temperature support matrix:
+//  - claude-opus-4-7: NO (400)
+//  - claude-opus-4-6, sonnet-4-6, haiku-4-5: YES (0–1)
+//  - any gpt-5* or o-series reasoning model: NO (400)
+//  - gpt-4o, gpt-4o-mini: YES (0–2, we cap at 1)
+//  - llama-* / Groq: YES (0–2, we cap at 1)
+export function _modelSupportsTemperature(model) {
+  if (!model) return true
+  if (model === 'claude-opus-4-7') return false
+  if (_isOpenAIReasoningModel(model)) return false
+  return true
+}
+
+// Map (model, preset) → reasoning_effort string for OpenAI reasoning models.
+// Returns null if the model isn't a reasoning model.
+export function _openaiReasoningEffort(model, preset) {
+  if (!_isOpenAIReasoningModel(model)) return null
+  // gpt-5.4 and gpt-5.5 family: none | low | medium | high | xhigh
+  const is54_55 = /^gpt-5\.[45](-(mini|nano))?$/.test(model)
+  // o-series has no off-switch; "low" is the floor
+  const isOSeries = /^o\d/.test(model)
   if (preset === 'off') {
-    if (is54_55) body.reasoning_effort = 'none'
-    else if (model.startsWith('gpt-5')) body.reasoning_effort = 'minimal'
-    else body.reasoning_effort = 'low' // o-series has no off; "low" is the floor
-    body.max_completion_tokens = 4096
-  } else if (preset === 'balanced') {
-    body.reasoning_effort = 'medium'
-    body.max_completion_tokens = 16384
-  } else if (preset === 'max') {
-    body.reasoning_effort = is54_55 ? 'xhigh' : 'high'
-    body.max_completion_tokens = 32768
+    if (is54_55) return 'none'
+    if (isOSeries) return 'low'
+    return 'minimal' // gpt-5 / -mini / -nano
+  }
+  if (preset === 'balanced') return 'medium'
+  if (preset === 'max') {
+    if (is54_55) return 'xhigh'
+    return 'high' // gpt-5 family and o-series cap at 'high'
+  }
+  // Unknown preset → treat as off
+  if (is54_55) return 'none'
+  if (isOSeries) return 'low'
+  return 'minimal'
+}
+
+function buildOpenAIBody(model, preset, messages, temperature) {
+  const isReasoning = _isOpenAIReasoningModel(model)
+  const body = { model, messages }
+
+  if (isReasoning) {
+    // Reasoning model: max_completion_tokens covers reasoning + visible output
+    // combined (per OpenAI docs). max_tokens is a 400 error here. Effort param
+    // values are model-family-specific (see _openaiReasoningEffort).
+    body.reasoning_effort = _openaiReasoningEffort(model, preset)
+    if (preset === 'balanced') body.max_completion_tokens = 16384
+    else if (preset === 'max') body.max_completion_tokens = 32768
+    else body.max_completion_tokens = 8192 // off — leaves room for "low" reasoning floor
   } else {
-    body.max_completion_tokens = 4096
+    // Legacy chat (gpt-4o, gpt-4o-mini): max_completion_tokens still accepted
+    // as an alias for max_tokens and is forward-compatible.
+    body.max_completion_tokens = 2048
+    if (temperature != null) {
+      const t = Math.min(1, Math.max(0, temperature))
+      body.temperature = t
+    }
   }
   return body
 }
 
-async function aiChat(messages, apiKey, model, preset = 'off', signal) {
+async function aiChat(messages, apiKey, model, preset = 'off', signal, temperature) {
   // Reset usage on every entry so a late-resolving orphan fetch (e.g. one we
   // raced past via withElapsedStatus) can't carry stale tokens into the next
   // trackCost() read.
@@ -140,10 +200,17 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal) {
     (route === 'openai' && _isOpenAIReasoningModel(resolvedModel))
   if (preset !== 'off' && !presetSupported) preset = 'off'
 
+  // Only forward temperature when the model accepts it. Caller can pass any
+  // value (or null/undefined); we gate here so we never 400 on opus-4-7 or
+  // OpenAI reasoning models.
+  const tempForBody = (temperature != null && _modelSupportsTemperature(resolvedModel))
+    ? temperature
+    : null
+
   if (route === 'anthropic') {
     const system = messages.find(m => m.role === 'system')?.content
     const userMsgs = messages.filter(m => m.role !== 'system')
-    const body = buildAnthropicBody(resolvedModel, preset, system, userMsgs)
+    const body = buildAnthropicBody(resolvedModel, preset, system, userMsgs, tempForBody)
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -174,9 +241,15 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal) {
     ? 'https://api.openai.com/v1'
     : BUNDLED_BASE_URL
 
-  const body = route === 'openai'
-    ? buildOpenAIBody(resolvedModel, preset, messages)
-    : { model: resolvedModel, messages, max_tokens: 2048 } // Groq: no reasoning models supported
+  let body
+  if (route === 'openai') {
+    body = buildOpenAIBody(resolvedModel, preset, messages, tempForBody)
+  } else {
+    // Groq (OpenAI-compatible): no reasoning models supported. Accepts
+    // max_completion_tokens (preferred) or max_tokens. Temperature 0–2; cap at 1.
+    body = { model: resolvedModel, messages, max_completion_tokens: 2048 }
+    if (tempForBody != null) body.temperature = Math.min(1, Math.max(0, tempForBody))
+  }
   const res = await fetch(baseUrl + '/chat/completions', {
     method: 'POST',
     headers: {
@@ -234,12 +307,12 @@ Rules:
 
 Return ONLY a JSON array of {{count}} strings, no other text. Example: ["agentix","proxima","condukt","envoyai","meshkey","vaultly","humanapi","autoplex","agenthq","delegata"]`
 
-export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60, preset = 'off', signal) {
+export async function generateDomainNames(description, systemPrompt, apiKey, model, batchSize = 60, preset = 'off', signal, temperature) {
   const resolvedPrompt = (systemPrompt || DEFAULT_SYSTEM_PROMPT).replaceAll('{{count}}', String(batchSize))
   const text = await aiChat([
     { role: 'system', content: resolvedPrompt },
     { role: 'user', content: `Idea: ${description}` },
-  ], apiKey, model, preset, signal)
+  ], apiKey, model, preset, signal, temperature)
 
   if (!text) throw new Error('Empty response from AI')
 
@@ -259,7 +332,7 @@ export const DEFAULT_FIT_PROMPT = `Score each domain name on four dimensions (0�
 Return ONLY a JSON object. Example:
 {"copygen.ai": {"fit": 8, "pro": 7, "mem": 8, "brd": 6}, "wordblast.io": {"fit": 5, "pro": 9, "mem": 7, "brd": 5}}`
 
-export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, preset = 'off', signal) {
+export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, preset = 'off', signal, temperature) {
   if (!domains.length || !context.trim()) return {}
 
   const promptTemplate = fitPrompt || DEFAULT_FIT_PROMPT
@@ -268,7 +341,7 @@ export async function scoreFitBatch(domains, context, apiKey, fitPrompt, model, 
   const text = await aiChat([
     { role: 'system', content: systemContent },
     { role: 'user', content: domains.join('\n') },
-  ], apiKey, model, preset, signal)
+  ], apiKey, model, preset, signal, temperature)
 
   const raw = extractJson(text)
   if (!raw || typeof raw !== 'object') return {}
@@ -298,11 +371,11 @@ export const DEFAULT_SYNONYM_PROMPT = `Given a domain name stem, return exactly 
 Vary the angle: include near-synonyms, evocative alternatives, and metaphorical variants.
 Return ONLY a JSON array of strings: ["word1", "word2", "word3", "word4", "word5", "word6"]`
 
-export async function generateSynonyms(stem, apiKey, systemPrompt, model, preset = 'off', signal) {
+export async function generateSynonyms(stem, apiKey, systemPrompt, model, preset = 'off', signal, temperature) {
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_SYNONYM_PROMPT },
     { role: 'user', content: stem },
-  ], apiKey, model, preset, signal)
+  ], apiKey, model, preset, signal, temperature)
   const arr = extractJson(text)
   if (!Array.isArray(arr)) return []
   return arr.filter(w => typeof w === 'string' && /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(w)).slice(0, 6)
@@ -324,7 +397,7 @@ const TLD_MEANINGS = {
   ly: 'short or action-oriented brand',
 }
 
-export async function associateDomains(domains, apiKey, systemPrompt, model, preset = 'off', signal) {
+export async function associateDomains(domains, apiKey, systemPrompt, model, preset = 'off', signal, temperature) {
   if (!domains.length) return {}
 
   // Annotate each domain with its TLD meaning so the AI cannot ignore it
@@ -337,7 +410,7 @@ export async function associateDomains(domains, apiKey, systemPrompt, model, pre
   const text = await aiChat([
     { role: 'system', content: systemPrompt || DEFAULT_ASSOC_PROMPT },
     { role: 'user', content: annotated.join('\n') },
-  ], apiKey, model, preset, signal)
+  ], apiKey, model, preset, signal, temperature)
 
   const assocs = extractJson(text)
   if (!assocs || typeof assocs !== 'object') return {}

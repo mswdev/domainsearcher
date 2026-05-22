@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=33'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=33'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage } from './generate.js?v=33'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=34'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=34'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage, _modelSupportsTemperature } from './generate.js?v=34'
 
 // Active search controller
 let _abortController = null
@@ -276,7 +276,7 @@ async function checkOne() {
     resultDiv.innerHTML = html + '<div class="text-xs text-cyan-500 mt-2 mb-1">generating synonyms...</div>'
     const synonymPrompt = document.getElementById('synonymsPromptBox')?.value || loadSetting('synonymPrompt') || undefined
     let synonyms = []
-    try { synonyms = await generateSynonyms(name, getKeyForModel(loadSetting('creativeModel')), synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off'); trackCost(loadSetting('creativeModel')) } catch {}
+    try { synonyms = await generateSynonyms(name, getKeyForModel(loadSetting('creativeModel')), synonymPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off', undefined, loadSetting('temperature') ?? 0.7); trackCost(loadSetting('creativeModel')) } catch {}
 
     if (synonyms.length) {
       html += '<div class="text-xs text-cyan-500 font-medium mt-3 mb-1">synonyms of "' + name + '"</div>'
@@ -669,7 +669,7 @@ async function loadFavData(favorites) {
   const needFit = newFavs.filter(d => fitCache[d.id] == null)
   if (needFit.length && fitContext) {
     try {
-      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, getKeyForModel(loadSetting('scoringModel')), undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off')
+      const scores = await scoreFitBatch(needFit.map(d => d.domain), fitContext, getKeyForModel(loadSetting('scoringModel')), undefined, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off', undefined, loadSetting('temperature') ?? 0.7)
       trackCost(loadSetting('scoringModel'))
       for (const d of needFit) {
         if (scores[d.domain] !== undefined) {
@@ -687,7 +687,7 @@ async function loadFavData(favorites) {
   const needAssoc = newFavs.filter(d => assocCache[d.id] == null)
   if (needAssoc.length) {
     try {
-      const assocs = await associateDomains(needAssoc.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+      const assocs = await associateDomains(needAssoc.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off', undefined, loadSetting('temperature') ?? 0.7)
       trackCost(loadSetting('creativeModel'))
       for (const d of needAssoc) {
         if (assocs[d.domain]) {
@@ -734,7 +734,7 @@ async function refreshAssociations() {
   if (btn) { btn.textContent = '⏳'; btn.style.opacity = '1'; btn.disabled = true }
   const assocPrompt = getAssocPrompt()
   try {
-    const assocs = await associateDomains(favorites.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off')
+    const assocs = await associateDomains(favorites.map(d => d.domain), getKeyForModel(loadSetting('creativeModel')), assocPrompt, loadSetting('creativeModel'), loadSetting('creativePreset') || 'off', undefined, loadSetting('temperature') ?? 0.7)
     trackCost(loadSetting('creativeModel'))
     const updated = Object.keys(assocs).length
     if (!updated) throw new Error('AI returned no associations — check API key or prompt')
@@ -798,7 +798,7 @@ async function rescoreFit() {
     const scores = await withElapsedStatus(
       document.getElementById('statusMsg'),
       'Re-scoring favorites...',
-      (sig) => scoreFitBatch(favorites.map(d => d.domain), context, getKeyForModel(loadSetting('scoringModel')), fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off', sig)
+      (sig) => scoreFitBatch(favorites.map(d => d.domain), context, getKeyForModel(loadSetting('scoringModel')), fitPrompt, loadSetting('scoringModel'), loadSetting('scoringPreset') || 'off', sig, loadSetting('temperature') ?? 0.7)
     )
     trackCost(loadSetting('scoringModel'))
     for (const d of favorites) {
@@ -1143,7 +1143,7 @@ async function startSearch() {
       names = await withElapsedStatus(
         document.getElementById('statusMsg'),
         'Generating domain name ideas...',
-        (sig) => generateDomainNames(desc, customPrompt || undefined, getKeyForModel(loadSetting('creativeModel')), loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off', sig)
+        (sig) => generateDomainNames(desc, customPrompt || undefined, getKeyForModel(loadSetting('creativeModel')), loadSetting('creativeModel'), loadSetting('batchSize') || 60, loadSetting('creativePreset') || 'off', sig, loadSetting('temperature') ?? 0.7)
       )
       trackCost(loadSetting('creativeModel'))
     } catch (e) {
@@ -1662,9 +1662,10 @@ function populateModelDropdowns() {
     if (loadSetting(settingKey) !== chosen) saveSetting(settingKey, chosen)
   }
   updatePresetAvailability()
+  updateTemperatureRowVisibility()
 }
 
-function onCreativeModelChange(val) { saveSetting('creativeModel', val); updatePresetAvailability() }
+function onCreativeModelChange(val) { saveSetting('creativeModel', val); updatePresetAvailability(); updateTemperatureRowVisibility() }
 function onScoringModelChange(val) { saveSetting('scoringModel', val); updatePresetAvailability() }
 function onBatchSizeInput(val) {
   const n = parseInt(val, 10)
@@ -1677,11 +1678,40 @@ function loadBatchSize() {
   if (v != null) document.getElementById('batchSize').value = v
 }
 
+function onTemperatureChange(val) {
+  const num = parseFloat(val)
+  if (isNaN(num)) return
+  const clamped = Math.min(1, Math.max(0, num))
+  saveSetting('temperature', clamped)
+  const valEl = document.getElementById('temperatureValue')
+  if (valEl) valEl.textContent = clamped.toFixed(2)
+}
+
+function loadTemperature() {
+  const stored = loadSetting('temperature')
+  const t = (stored == null || isNaN(parseFloat(stored))) ? 0.7 : parseFloat(stored)
+  const slider = document.getElementById('temperatureSlider')
+  const valEl = document.getElementById('temperatureValue')
+  if (slider) slider.value = String(t)
+  if (valEl) valEl.textContent = t.toFixed(2)
+}
+
+function updateTemperatureRowVisibility() {
+  const model = loadSetting('creativeModel')
+  const row = document.getElementById('temperatureRow')
+  if (!row) return
+  if (_modelSupportsTemperature(model)) {
+    row.style.display = ''
+  } else {
+    row.style.display = 'none'
+  }
+}
+
 // --- Thinking presets ---
 const THINKING_MODELS = [
   'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6',
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano',
-  'gpt-5', 'gpt-5-mini',
+  'gpt-5', 'gpt-5-mini', 'gpt-5-nano',
   'o4-mini',
 ]
 const PRESET_BADGE_CONFIG = {
@@ -2225,7 +2255,7 @@ async function runOneLoopIteration() {
 
   let iterationCost = 0
 
-  const names = await generateDomainNames(ideaWithSeen, finalPrompt || undefined, apiKey, model, batchSize, preset)
+  const names = await generateDomainNames(ideaWithSeen, finalPrompt || undefined, apiKey, model, batchSize, preset, undefined, loadSetting('temperature') ?? 0.7)
   iterationCost += estimateCost(getLastUsage(), model)
   const seenSet = new Set(seen)
   const fresh = names.filter(n => !seenSet.has(n))
@@ -2266,7 +2296,7 @@ async function runOneLoopIteration() {
     const scoringModel = loadSetting('loopScoringModel') || loadSetting('scoringModel')
     const scoringPreset = loadSetting('loopScoringPreset') || 'off'
     try {
-      const scores = await scoreFitBatch(available, idea, getKeyForModel(scoringModel), null, scoringModel, scoringPreset)
+      const scores = await scoreFitBatch(available, idea, getKeyForModel(scoringModel), null, scoringModel, scoringPreset, undefined, loadSetting('temperature') ?? 0.7)
       iterationCost += estimateCost(getLastUsage(), scoringModel)
       for (const [domain, s] of Object.entries(scores || {})) {
         const rec = db.findUnique(domain)
@@ -2349,6 +2379,7 @@ function onExportAvailable() {
 // --- Init ---
 async function init() {
   await hydrate()
+  loadTemperature()
   loadWeights()
   loadSearchZones()
   loadCompareZones()
@@ -2427,6 +2458,7 @@ Object.assign(window, {
   onCreativePresetChange,
   onScoringPresetChange,
   onBatchSizeInput,
+  onTemperatureChange,
   saveWeights,
   renderScores,
   dismissResume,
