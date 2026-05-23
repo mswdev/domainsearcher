@@ -92,26 +92,31 @@ export function detectProvider(key) {
 function buildAnthropicBody(model, preset, system, userMsgs, temperature) {
   const base = { model, system, messages: userMsgs }
 
+  // max_tokens is a CAP, not a usage target. Sized generously here so heavy
+  // custom prompts (scratch blocks, multi-stage reasoning) don't truncate.
+  // Simple prompts still cost ~the same since the model only emits what it
+  // needs — the cap only matters when something would otherwise overflow.
+
   // Opus 4.7 is ALWAYS adaptive; effort maps to low/medium/xhigh per preset.
   if (model === 'claude-opus-4-7') {
     let effort, maxTokens
     if (preset === 'balanced') { effort = 'medium'; maxTokens = 24000 }
     else if (preset === 'max') { effort = 'xhigh'; maxTokens = 32000 }
-    else { effort = 'low'; maxTokens = 4096 }
+    else { effort = 'low'; maxTokens = 16000 }
     return { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort } }
     // No temperature ever — opus-4-7 rejects it with 400.
   }
 
   // Haiku 4.5: no adaptive, no effort, no output_config.
   if (model.includes('haiku')) {
-    const body = { ...base, max_tokens: 2048 }
+    const body = { ...base, max_tokens: 8000 }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
 
   // Opus 4.6 / Sonnet 4.6: adaptive + effort, per-preset.
   if (preset === 'off') {
-    const body = { ...base, max_tokens: 4096 }
+    const body = { ...base, max_tokens: 16000 }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
@@ -202,13 +207,13 @@ function buildOpenAIBody(model, preset, messages, temperature) {
     // combined (per OpenAI docs). max_tokens is a 400 error here. Effort param
     // values are model-family-specific (see _openaiReasoningEffort).
     body.reasoning_effort = _openaiReasoningEffort(model, preset)
-    if (preset === 'balanced') body.max_completion_tokens = 16384
+    if (preset === 'balanced') body.max_completion_tokens = 24576
     else if (preset === 'max') body.max_completion_tokens = 32768
-    else body.max_completion_tokens = 8192 // off — leaves room for "low" reasoning floor
+    else body.max_completion_tokens = 16384 // off — generous so heavy prompts (scratch blocks etc.) don't truncate
   } else {
     // Legacy chat (gpt-4o, gpt-4o-mini): max_completion_tokens still accepted
     // as an alias for max_tokens and is forward-compatible.
-    body.max_completion_tokens = 2048
+    body.max_completion_tokens = 8000
     if (temperature != null) {
       const t = Math.min(1, Math.max(0, temperature))
       body.temperature = t
@@ -283,7 +288,7 @@ async function aiChat(messages, apiKey, model, preset = 'off', signal, temperatu
   } else {
     // Groq (OpenAI-compatible): no reasoning models supported. Accepts
     // max_completion_tokens (preferred) or max_tokens. Temperature 0–2; cap at 1.
-    body = { model: resolvedModel, messages, max_completion_tokens: 2048 }
+    body = { model: resolvedModel, messages, max_completion_tokens: 8000 }
     if (tempForBody != null) body.temperature = Math.min(1, Math.max(0, tempForBody))
   }
   const res = await fetch(baseUrl + '/chat/completions', {
