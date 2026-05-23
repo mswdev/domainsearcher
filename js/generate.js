@@ -100,38 +100,38 @@ function buildAnthropicBody(model, preset, system, userMsgs, temperature) {
   // Opus 4.7 is ALWAYS adaptive; effort maps to low/medium/xhigh per preset.
   if (model === 'claude-opus-4-7') {
     let effort, maxTokens
-    if (preset === 'balanced') { effort = 'medium'; maxTokens = 24000 }
-    else if (preset === 'max') { effort = 'xhigh'; maxTokens = 32000 }
-    else { effort = 'low'; maxTokens = 16000 }
+    if (preset === 'balanced') { effort = 'medium'; maxTokens = 48000 }
+    else if (preset === 'max') { effort = 'xhigh'; maxTokens = 64000 }
+    else { effort = 'low'; maxTokens = 32000 }
     return { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort } }
     // No temperature ever — opus-4-7 rejects it with 400.
   }
 
   // Haiku 4.5: no adaptive, no effort, no output_config.
   if (model.includes('haiku')) {
-    const body = { ...base, max_tokens: 8000 }
+    const body = { ...base, max_tokens: 16000 }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
 
   // Opus 4.6 / Sonnet 4.6: adaptive + effort, per-preset.
   if (preset === 'off') {
-    const body = { ...base, max_tokens: 16000 }
+    const body = { ...base, max_tokens: 32000 }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
   if (preset === 'balanced') {
-    // 24K gives headroom for heavy custom prompts (scratch blocks, long
-    // reasoning passes) that previously truncated at 16K.
-    const body = { ...base, max_tokens: 24000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
+    // 48K gives heavy custom prompts headroom for adaptive thinking +
+    // verbose scratch + JSON array. Sonnet 4.6 max output is 64K; Opus is 128K.
+    const body = { ...base, max_tokens: 48000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
   }
   if (preset === 'max') {
     let maxTokens
-    if (model === 'claude-opus-4-6') maxTokens = 32000
-    else if (model === 'claude-sonnet-4-6') maxTokens = 24000
-    else maxTokens = 24000
+    if (model === 'claude-opus-4-6') maxTokens = 64000
+    else if (model === 'claude-sonnet-4-6') maxTokens = 48000
+    else maxTokens = 48000
     const body = { ...base, max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort: 'max' } }
     if (temperature != null) body.temperature = Math.min(1, Math.max(0, temperature))
     return body
@@ -206,14 +206,16 @@ function buildOpenAIBody(model, preset, messages, temperature) {
     // Reasoning model: max_completion_tokens covers reasoning + visible output
     // combined (per OpenAI docs). max_tokens is a 400 error here. Effort param
     // values are model-family-specific (see _openaiReasoningEffort).
+    // Generous caps because heavy custom prompts (scratch blocks, multi-stage
+    // reasoning) easily exceed conservative defaults.
     body.reasoning_effort = _openaiReasoningEffort(model, preset)
-    if (preset === 'balanced') body.max_completion_tokens = 24576
-    else if (preset === 'max') body.max_completion_tokens = 32768
-    else body.max_completion_tokens = 16384 // off — generous so heavy prompts (scratch blocks etc.) don't truncate
+    if (preset === 'balanced') body.max_completion_tokens = 48000
+    else if (preset === 'max') body.max_completion_tokens = 64000
+    else body.max_completion_tokens = 32000 // off — generous for heavy prompts
   } else {
     // Legacy chat (gpt-4o, gpt-4o-mini): max_completion_tokens still accepted
-    // as an alias for max_tokens and is forward-compatible.
-    body.max_completion_tokens = 8000
+    // as an alias for max_tokens and is forward-compatible. gpt-4o max is 16K.
+    body.max_completion_tokens = 12000
     if (temperature != null) {
       const t = Math.min(1, Math.max(0, temperature))
       body.temperature = t
