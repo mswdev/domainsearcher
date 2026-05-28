@@ -1,5 +1,6 @@
 .gstack/
 .mystack/
+.claude/
 
 # Local runtime data
 config.json
