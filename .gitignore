@@ -1,2 +1,7 @@
 .gstack/
 .mystack/
+
+# Local runtime data
+config.json
+db.json
+loop-log.jsonl

@@ -501,6 +501,54 @@ class DomainDB {
     return { fitContext: set.fitContext, restored: savedDomains.length }
   }
 
+  // Additive variant of restoreSet — adds the set's domains to current
+  // favorites without clearing what's already starred. Used to combine
+  // multiple saved sets into a single working favorites list.
+  // Accepts a single id or an array of ids.
+  mergeSets(ids) {
+    const idList = Array.isArray(ids) ? ids : [ids]
+    let added = 0       // brand-new domain rows created
+    let promoted = 0    // existing non-favorite rows flipped to favorite
+    let alreadyFav = 0  // already a favorite — no-op
+    const fitContexts = []
+    for (const id of idList) {
+      const set = _state.db.sets.find(s => s.id === id)
+      if (!set) continue
+      if (set.fitContext) fitContexts.push(set.fitContext)
+      const savedDomains = JSON.parse(set.domains || '[]')
+      for (const saved of savedDomains) {
+        const idx = _state.db.domains.findIndex(d => d.domain === saved.domain)
+        if (idx >= 0) {
+          const cur = _state.db.domains[idx]
+          if (cur.favorite) {
+            alreadyFav++
+            // Promote to super if the merged set marked it so.
+            if (saved.superFavorite && !cur.superFavorite) {
+              _state.db.domains[idx] = { ...cur, superFavorite: true }
+            }
+          } else {
+            _state.db.domains[idx] = {
+              ...cur,
+              favorite: true,
+              superFavorite: cur.superFavorite || saved.superFavorite || false,
+            }
+            promoted++
+          }
+        } else {
+          _state.db.domains.unshift({
+            ...saved,
+            id: crypto.randomUUID(),
+            favorite: true,
+            checkedAt: new Date().toISOString(),
+          })
+          added++
+        }
+      }
+    }
+    _scheduleDbFlush()
+    return { added, promoted, alreadyFav, fitContexts }
+  }
+
   exportJSON() {
     const data = {
       domains: _state.db.domains,

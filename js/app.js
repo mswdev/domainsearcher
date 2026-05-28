@@ -1,6 +1,6 @@
-import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=39'
-import { checkDomainAvailable, checkMultipleZones } from './check.js?v=39'
-import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage, _modelSupportsTemperature } from './generate.js?v=39'
+import { db, saveSetting, loadSetting, hydrate, lib, logLoopIteration, fetchLoopLog } from './storage.js?v=44'
+import { checkDomainAvailable, checkMultipleZones } from './check.js?v=44'
+import { generateDomainNames, scoreFitBatch, associateDomains, generateSynonyms, DEFAULT_SYSTEM_PROMPT, DEFAULT_ASSOC_PROMPT, DEFAULT_FIT_PROMPT, DEFAULT_SYNONYM_PROMPT, AIAPIError, getLastUsage, _modelSupportsTemperature } from './generate.js?v=44'
 
 // Active search controller
 let _abortController = null
@@ -364,6 +364,7 @@ function domainRow(d, opts = {}) {
   const desc = opts.showDesc && d.description
     ? '<span class="text-xs text-gray-400 ml-3">' + d.description.slice(0, 40) + '</span>'
     : ''
+  const prov = provenanceIcons(d)
   const ts = d.checkedAt
   const tsCell = ts
     ? '<span class="text-xs text-gray-300 font-mono ml-2 whitespace-nowrap" title="' + new Date(ts).toLocaleString() + '">' + fmtAgo(ts) + '</span>'
@@ -377,8 +378,127 @@ function domainRow(d, opts = {}) {
   return '<div class="' + (opts.compact ? 'px-3' : 'px-6') + rowBg + ' ' + (opts.compact ? 'py-2' : 'pt-3 ' + (opts.showZones ? 'pb-1' : 'pb-3')) + '">'
     + '<div class="flex items-center justify-between">'
     + '<div><span class="font-mono ' + nameClass + '">' + d.domain + '</span>' + desc + '</div>'
-    + '<div class="flex items-center gap-2">' + superStar + star + badge + tsCell + del + '</div>'
-    + '</div></div>' + zonesRow
+    + '<div class="flex items-center gap-2">' + prov + superStar + star + badge + tsCell + del + '</div>'
+    + '</div>'
+    + '</div>' + zonesRow
+}
+
+function _escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function _provenanceTips(d) {
+  // Chip labels: show what we actually know.
+  const ideaLabel = d.ideaName
+    || (d.description ? (d.description.length > 60 ? d.description.slice(0, 60) + '…' : d.description) : null)
+  const promptLabel = d.genPromptName || null
+
+  // Tooltips: prefer the saved name; fall back to a SHORT description; never
+  // dump the whole prompt text. Missing fields get an explicit placeholder
+  // (used by provenanceIcons so the `p` icon is never silently absent).
+  const truncDesc = d.description
+    ? (d.description.length > 80 ? d.description.slice(0, 80) + '…' : d.description)
+    : null
+  const ideaTip = d.ideaName
+    ? 'Idea: ' + d.ideaName
+    : (truncDesc ? 'Idea: ' + truncDesc : null)
+  const promptTip = d.genPromptName
+    ? 'Prompt: ' + d.genPromptName
+    : null
+  return { ideaLabel, promptLabel, ideaTip, promptTip }
+}
+
+// Compact inline pills sized to sit next to the star/delete buttons.
+// Each is a single letter (i = idea, p = prompt); full text is shown via
+// a global fixed-position tooltip wired up by _initProvTooltip() so it
+// escapes the overflow:hidden of the surrounding card.
+function _provIcon(letter, bg, fg, tip) {
+  return '<span class="prov-icon-wrap inline-flex items-center" data-tip="' + _escAttr(tip || '') + '">'
+    + '<span class="inline-flex items-center justify-center w-5 h-5 rounded-full ' + bg + ' ' + fg + ' text-[10px] font-bold leading-none cursor-help select-none">' + letter + '</span>'
+    + '</span>'
+}
+
+function provenanceIcons(d) {
+  const t = _provenanceTips(d)
+  // Show icons whenever the row has any provenance info — even partial.
+  // Missing field → placeholder tip so the user knows it wasn't recorded
+  // (older rows from before this feature shipped have no prompt name).
+  const hasAny = t.ideaLabel || t.promptLabel || d.description
+  if (!hasAny) return ''
+  const ideaTip = t.ideaTip || 'Idea: (not recorded)'
+  const promptTip = t.promptTip || 'Prompt: (not recorded for this row)'
+  const parts = [
+    _provIcon('i', 'bg-cyan-100', 'text-cyan-700', ideaTip),
+    _provIcon('p', 'bg-violet-100', 'text-violet-700', promptTip),
+  ]
+  return '<span class="inline-flex items-center gap-1">' + parts.join('') + '</span>'
+}
+
+// One-time setup: a single tooltip element on <body> shown/hidden via
+// event delegation. position:fixed dodges the overflow:hidden on parent
+// cards; auto-flips above the icon when there's no room below.
+function _initProvTooltip() {
+  if (document.getElementById('provGlobalTooltip')) return
+  const tip = document.createElement('div')
+  tip.id = 'provGlobalTooltip'
+  tip.style.cssText = [
+    'position:fixed','z-index:9999','display:none','padding:8px 10px',
+    'background:#111827','color:#fff','font-size:12px','line-height:1.4',
+    'border-radius:6px','white-space:pre-wrap','word-break:break-word',
+    'max-width:340px','pointer-events:none','box-shadow:0 6px 16px rgba(0,0,0,0.25)',
+    'top:0','left:0',
+  ].join(';')
+  document.body.appendChild(tip)
+
+  const show = (wrap) => {
+    const text = wrap.dataset.tip || ''
+    if (!text) return
+    tip.textContent = text
+    tip.style.display = 'block'
+    const r = wrap.getBoundingClientRect()
+    const tw = tip.offsetWidth
+    const th = tip.offsetHeight
+    let top = r.bottom + 6
+    let left = r.right - tw
+    if (left < 8) left = 8
+    if (left + tw > window.innerWidth - 8) left = window.innerWidth - tw - 8
+    if (top + th > window.innerHeight - 8) top = r.top - th - 6
+    if (top < 8) top = 8
+    tip.style.top = top + 'px'
+    tip.style.left = left + 'px'
+  }
+  const hide = () => { tip.style.display = 'none' }
+
+  document.addEventListener('mouseover', (e) => {
+    const wrap = e.target.closest && e.target.closest('.prov-icon-wrap')
+    if (wrap) show(wrap)
+  })
+  document.addEventListener('mouseout', (e) => {
+    const wrap = e.target.closest && e.target.closest('.prov-icon-wrap')
+    if (!wrap) return
+    const to = e.relatedTarget
+    if (to && to.closest && to.closest('.prov-icon-wrap') === wrap) return
+    hide()
+  })
+  // Hide on scroll so the tooltip doesn't float past the icon
+  window.addEventListener('scroll', hide, true)
+}
+
+// Larger labeled chips used in the favorites views (card + table) where
+// there's space for the full label below/next to the domain name.
+function provenanceChips(d) {
+  const t = _provenanceTips(d)
+  if (!t.ideaLabel && !t.promptLabel) return ''
+  const parts = []
+  if (t.ideaLabel) {
+    parts.push('<span class="text-[11px] px-1.5 py-0.5 rounded bg-cyan-50 text-cyan-700 border border-cyan-100" title="' + _escAttr(t.ideaTip || '') + '">'
+      + 'idea: ' + _escAttr(t.ideaLabel) + '</span>')
+  }
+  if (t.promptLabel) {
+    parts.push('<span class="text-[11px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-100" title="' + _escAttr(t.promptTip || '') + '">'
+      + 'prompt: ' + _escAttr(t.promptLabel) + '</span>')
+  }
+  return '<div class="flex flex-wrap gap-1 mt-1">' + parts.join('') + '</div>'
 }
 
 // --- Scoring functions ---
@@ -501,6 +621,7 @@ function zonePillsHTML(zones, filterZones, name) {
 
 function scoreCard(s, rank) {
   const { id, domain, scores, superFavorite: isSuper, available } = s
+  const prov = provenanceChips(s)
   const medalColors = ['#eab308', '#9ca3af', '#d97706']
   const medalLabel = rank < 3
     ? '<span style="color:' + medalColors[rank] + ';font-weight:700;font-size:12px">#' + (rank + 1) + '</span>'
@@ -547,6 +668,7 @@ function scoreCard(s, rank) {
     +     superBtn + starBtn + delBtn
     +   '</div>'
     + '</div>'
+    + prov
     // Zones
     + '<div id="zones-' + id + '" style="display:flex;flex-wrap:wrap;gap:4px">' + pills + '</div>'
     // Association
@@ -584,9 +706,11 @@ function scoreRow(s, rank) {
   const delBtn = '<button onclick="deleteDomain(\'' + id + '\',this)" title="Delete" aria-label="Remove domain" style="font-size:14px;font-weight:bold;color:#d1d5db" onmouseover="this.style.color=\'#f87171\'" onmouseout="this.style.color=\'#d1d5db\'">&#x2715;</button>'
   const assocRaw = assocCache[id]
   const assoc = Array.isArray(assocRaw) ? assocRaw.join(' · ') : (assocRaw || null)
+  const prov = provenanceChips(s)
   return '<tr class="hover:bg-purple-25' + rowBg + '">'
     + '<td class="px-3 py-2" style="width:160px">'
     + '<div class="flex items-center gap-1 flex-wrap">' + medal + '<span class="font-mono font-semibold ' + nameColor + '">' + domain + '</span></div>'
+    + prov
     + '</td>'
     + '<td class="px-2 py-2" style="width:210px">'
     + '<div id="zones-' + id + '" class="flex flex-wrap gap-1">' + pills + '</div>'
@@ -764,7 +888,11 @@ function renderScores(favorites) {
     const zones = zoneCache[d.id] || null
     const aiScores = fitCache[d.id] ?? null
     const scores = scoreDomain(name, zones, aiScores)
-    return { id: d.id, domain: d.domain, name, scores, superFavorite: d.superFavorite, available: d.available }
+    return {
+      id: d.id, domain: d.domain, name, scores,
+      superFavorite: d.superFavorite, available: d.available,
+      ideaName: d.ideaName, genPromptName: d.genPromptName, description: d.description,
+    }
   })
   scored.sort((a, b) => {
     if (a.superFavorite !== b.superFavorite) return b.superFavorite ? 1 : -1
@@ -823,8 +951,8 @@ let _historyCurrentPage = 0
 
 // Filter state — preserved across re-renders. Updated by the on*FilterChange
 // handlers and consumed by applySavedFilters / applyHistoryFilters in loadSaved.
-const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null }
-const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false }
+const _savedFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, lastSearchOnly: false }
+const _historyFilter = { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false, lastSearchOnly: false }
 
 function _stemOf(domain) { return domain.replace(/\.[a-z]+$/, '') }
 
@@ -839,6 +967,10 @@ function _matchesFilter(d, f) {
     const ageDays = (Date.now() - ts) / 86400000
     if (f.newerDays != null && ageDays > f.newerDays) return false
     if (f.olderDays != null && ageDays < f.olderDays) return false
+  }
+  if (f.lastSearchOnly) {
+    const rid = loadSetting('lastRunId')
+    if (!rid || d.runId !== rid) return false
   }
   return true
 }
@@ -870,6 +1002,8 @@ function onSavedFilterChange() {
   _savedFilter.maxLen = _parseDays(document.getElementById('savedFilterMaxLen'))
   _savedFilter.newerDays = _parseDays(document.getElementById('savedFilterNewerDays'))
   _savedFilter.olderDays = _parseDays(document.getElementById('savedFilterOlderDays'))
+  const lr = document.getElementById('savedFilterLastSearch')
+  _savedFilter.lastSearchOnly = !!(lr && lr.checked)
   _savedAvailCurrentPage = 0
   loadSaved()
 }
@@ -883,26 +1017,30 @@ function onHistoryFilterChange() {
   _historyFilter.maxLen = _parseDays(document.getElementById('historyFilterMaxLen'))
   _historyFilter.newerDays = _parseDays(document.getElementById('historyFilterNewerDays'))
   _historyFilter.olderDays = _parseDays(document.getElementById('historyFilterOlderDays'))
+  const lr = document.getElementById('historyFilterLastSearch')
+  _historyFilter.lastSearchOnly = !!(lr && lr.checked)
   _historyCurrentPage = 0
   loadSaved()
 }
 
 function clearSavedFilters() {
-  Object.assign(_savedFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null })
+  Object.assign(_savedFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, lastSearchOnly: false })
   for (const id of ['savedFilterText', 'savedFilterMinLen', 'savedFilterMaxLen', 'savedFilterNewerDays', 'savedFilterOlderDays']) {
     const el = document.getElementById(id); if (el) el.value = ''
   }
-  const nn = document.getElementById('savedFilterNoNums'); if (nn) nn.checked = false
+  for (const id of ['savedFilterNoNums', 'savedFilterLastSearch']) {
+    const el = document.getElementById(id); if (el) el.checked = false
+  }
   _savedAvailCurrentPage = 0
   loadSaved()
 }
 
 function clearHistoryFilters() {
-  Object.assign(_historyFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false })
+  Object.assign(_historyFilter, { text: '', noNums: false, minLen: null, maxLen: null, newerDays: null, olderDays: null, avail: 'all', favOnly: false, lastSearchOnly: false })
   for (const id of ['historyFilterText', 'historyFilterMinLen', 'historyFilterMaxLen', 'historyFilterNewerDays', 'historyFilterOlderDays']) {
     const el = document.getElementById(id); if (el) el.value = ''
   }
-  for (const id of ['historyFilterNoNums', 'historyFilterFav']) {
+  for (const id of ['historyFilterNoNums', 'historyFilterFav', 'historyFilterLastSearch']) {
     const el = document.getElementById(id); if (el) el.checked = false
   }
   const av = document.getElementById('historyFilterAvail'); if (av) av.value = 'all'
@@ -1055,6 +1193,9 @@ function restoreSectionCollapse(name) {
 function toggleSearchCollapse() { toggleSectionCollapse('search') }
 function toggleSetsCollapse() { toggleSectionCollapse('sets') }
 
+// Module-level state for the sets multi-select toolbar.
+const _selectedSetIds = new Set()
+
 function loadSets() {
   const sets = db.listSets()
   const section = document.getElementById('setsSection')
@@ -1063,30 +1204,96 @@ function loadSets() {
   if (!sets.length) {
     section.classList.add('hidden')
     grid.classList.remove('xl:grid-cols-2')
+    _selectedSetIds.clear()
     return
   }
   grid.classList.add('xl:grid-cols-2')
   section.classList.remove('hidden')
-  list.innerHTML = sets.map(s => {
+
+  for (const id of [..._selectedSetIds]) {
+    if (!sets.some(s => s.id === id)) _selectedSetIds.delete(id)
+  }
+  const selN = _selectedSetIds.size
+  const mergeBar = selN > 0
+    ? '<div class="px-6 py-2 bg-amber-25 border-b border-amber-100 flex items-center gap-2 text-xs">'
+        + '<span class="text-amber-700 font-medium">' + selN + ' selected</span>'
+        + '<button onclick="mergeSelectedSets()" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-3 py-1 rounded">Merge into favorites</button>'
+        + '<button onclick="clearSetSelection()" class="text-amber-600 hover:text-amber-800 px-2">clear</button>'
+      + '</div>'
+    : '<div class="px-6 py-2 bg-amber-25 border-b border-amber-100 text-xs text-amber-600">Tip: check multiple sets to merge them together.</div>'
+
+  const rows = sets.map(s => {
     const date = new Date(s.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     const domains = JSON.parse(s.domains)
     const superCount = domains.filter(d => d.superFavorite).length
     const preview = domains.slice(0, 4).map(d => d.domain).join(', ') + (domains.length > 4 ? '...' : '')
-    return '<div class="px-6 py-3 flex items-center justify-between hover:bg-amber-25">'
-      + '<div>'
-      + '<span class="font-semibold text-amber-900">' + s.name + '</span>'
+    const checked = _selectedSetIds.has(s.id) ? ' checked' : ''
+    const safeName = _escAttr(s.name || '')
+    const safePreview = _escAttr(preview)
+    const safeFit = s.fitContext ? _escAttr(s.fitContext) : ''
+    return '<div class="px-6 py-3 flex items-center justify-between hover:bg-amber-25 gap-3">'
+      + '<label class="flex items-center cursor-pointer flex-shrink-0">'
+      +   '<input type="checkbox" onchange="toggleSetSelected(\'' + s.id + '\')" class="w-4 h-4 accent-amber-500"' + checked + '>'
+      + '</label>'
+      + '<div class="flex-1 min-w-0">'
+      + '<span class="font-semibold text-amber-900">' + safeName + '</span>'
       + '<span class="text-xs text-amber-500 ml-2">' + s.count + ' domains' + (superCount ? ' (' + superCount + ' super)' : '') + '</span>'
       + '<span class="text-xs text-gray-400 ml-2">' + date + '</span>'
-      + '<div class="text-xs text-gray-400 font-mono mt-0.5">' + preview + '</div>'
-      + (s.fitContext ? '<div class="text-xs text-purple-400 mt-0.5">FIT: ' + s.fitContext + '</div>' : '')
+      + '<div class="text-xs text-gray-400 font-mono mt-0.5">' + safePreview + '</div>'
+      + (safeFit ? '<div class="text-xs text-purple-400 mt-0.5">FIT: ' + safeFit + '</div>' : '')
       + '</div>'
-      + '<div class="flex items-center gap-2">'
-      + '<button onclick="restoreSet(\'' + s.id + '\')" class="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1 rounded font-medium">Restore</button>'
+      + '<div class="flex items-center gap-2 flex-shrink-0">'
+      + '<button onclick="mergeSet(\'' + s.id + '\')" title="Add this set into your current favorites" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-3 py-1 rounded font-medium">Merge</button>'
+      + '<button onclick="restoreSet(\'' + s.id + '\')" title="Replace current favorites with this set" class="text-xs bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1 rounded font-medium">Restore</button>'
       + '<button onclick="deleteSet(\'' + s.id + '\')" class="text-gray-300 hover:text-red-400 text-xs">x</button>'
       + '</div>'
       + '</div>'
   }).join('')
+
+  list.innerHTML = mergeBar + rows
   restoreSectionCollapse('sets')
+}
+
+function toggleSetSelected(id) {
+  if (_selectedSetIds.has(id)) _selectedSetIds.delete(id)
+  else _selectedSetIds.add(id)
+  loadSets()
+}
+
+function clearSetSelection() {
+  _selectedSetIds.clear()
+  loadSets()
+}
+
+function _applyMergeResult(res) {
+  if (!res) return
+  zoneCache = {}
+  fitCache = {}
+  assocCache = {}
+  _loadedFavIds.clear()
+  const ctxEl = document.getElementById('fitContext')
+  if (ctxEl && !ctxEl.value.trim() && res.fitContexts && res.fitContexts.length) {
+    ctxEl.value = [...new Set(res.fitContexts)].join('; ')
+    onFitContextInput()
+  }
+  const bits = []
+  if (res.added) bits.push(res.added + ' added')
+  if (res.promoted) bits.push(res.promoted + ' starred')
+  if (res.alreadyFav) bits.push(res.alreadyFav + ' already favorited')
+  toast('Merged: ' + (bits.length ? bits.join(', ') : 'nothing new'))
+  loadSaved()
+}
+
+function mergeSet(id) {
+  _applyMergeResult(db.mergeSets([id]))
+}
+
+function mergeSelectedSets() {
+  if (!_selectedSetIds.size) return
+  const ids = [..._selectedSetIds]
+  const res = db.mergeSets(ids)
+  _selectedSetIds.clear()
+  _applyMergeResult(res)
 }
 
 function restoreSet(id) {
@@ -1113,6 +1320,40 @@ function exportData() {
   db.exportJSON()
 }
 
+// --- Provenance resolvers ---
+// Stamp each upserted domain with which idea + generation-prompt produced it,
+// so the UI can show "what we used for what". Latest-write-wins: if a domain
+// re-appears under a different prompt, the new provenance overwrites the old.
+function _resolveIdeaProvenance(description) {
+  const text = (description || '').trim()
+  if (!text) return { id: null, name: null }
+  const sel = document.getElementById('ideaPicker')
+  const selectedId = sel ? sel.value : ''
+  if (selectedId) {
+    const item = lib.ideas.get(selectedId)
+    if (item && (item.text || '').trim() === text) return { id: item.id, name: item.name }
+  }
+  const match = lib.ideas.list().find(it => (it.text || '').trim() === text)
+  if (match) return { id: match.id, name: match.name }
+  return { id: null, name: null }
+}
+
+// Pass the raw textarea value (may be empty). Empty → built-in default prompt.
+// Non-empty: match against saved library by exact text; unmatched → "Custom".
+function _resolveGenPromptProvenance(rawPromptText) {
+  const text = (rawPromptText || '').trim()
+  const list = lib.prompts.list('generation')
+  if (!text) {
+    const builtin = list.find(p => p.isBuiltin)
+    return builtin
+      ? { id: builtin.id, name: builtin.name }
+      : { id: 'builtin_generation', name: 'Default' }
+  }
+  const match = list.find(p => (p.text || '').trim() === text)
+  if (match) return { id: match.id, name: match.name }
+  return { id: null, name: 'Custom' }
+}
+
 // --- Main search ---
 async function startSearch() {
   const desc = document.getElementById('description').value.trim()
@@ -1130,7 +1371,14 @@ async function startSearch() {
   const signal = _abortController.signal
 
   const zones = getSelectedZones()
-  const customPrompt = document.getElementById('promptBox').value.trim()
+  const rawPrompt = document.getElementById('promptBox').value
+  const customPrompt = rawPrompt.trim()
+
+  // Capture provenance once for this search — used to stamp every upserted domain.
+  const ideaProv = _resolveIdeaProvenance(desc)
+  const promptProv = _resolveGenPromptProvenance(rawPrompt)
+  const searchRunId = 'search_' + Date.now()
+  saveSetting('lastRunId', searchRunId)
 
   // Save active search state for resume
   const activeSearch = { description: desc, zones, prompt: customPrompt || '' }
@@ -1178,7 +1426,15 @@ async function startSearch() {
         const available = await checkDomainAvailable(domain, signal)
         if (signal.aborted) return
 
-        const record = db.upsert(domain, { domain, available, description: desc }, { available, description: desc })
+        const provFields = {
+          description: desc,
+          ideaId: ideaProv.id,
+          ideaName: ideaProv.name,
+          genPromptId: promptProv.id,
+          genPromptName: promptProv.name,
+          runId: searchRunId,
+        }
+        const record = db.upsert(domain, { domain, available, ...provFields }, { available, ...provFields })
 
         // Append to history
         const historySection = document.getElementById('historySection')
@@ -2159,6 +2415,7 @@ function startLoop() {
   _loopBackoffMultiplier = 1
   _loopTotalCost = 0
   _loopRunId = 'loop_' + Date.now()
+  saveSetting('lastRunId', _loopRunId)
   _loopController = new AbortController()
   const btn = document.getElementById('loopStartStop')
   if (btn) {
@@ -2240,6 +2497,22 @@ async function runOneLoopIteration() {
   if (!idea) throw new Error('No active idea')
 
   const customPrompt = promptId ? lib.prompts.get('generation', promptId)?.text : null
+
+  // Resolve provenance for stamping each upserted domain. Loop has IDs
+  // directly from settings — fall back to text-match only when no ID is set.
+  let ideaProv
+  if (ideaId) {
+    ideaProv = { id: ideaId, name: lib.ideas.get(ideaId)?.name || null }
+  } else {
+    ideaProv = _resolveIdeaProvenance(idea)
+  }
+  let promptProv
+  if (promptId) {
+    promptProv = { id: promptId, name: lib.prompts.get('generation', promptId)?.name || null }
+  } else {
+    promptProv = _resolveGenPromptProvenance(null)
+  }
+
   const seen = db.getSeenStems()
   const seenSlice = seen.slice(-maxSeen).join(', ')
 
@@ -2278,10 +2551,19 @@ async function runOneLoopIteration() {
         if (_loopController?.signal.aborted) return
         throw e
       }
+      const provFields = {
+        description: idea,
+        loopRunId: _loopRunId,
+        runId: _loopRunId,
+        ideaId: ideaProv.id,
+        ideaName: ideaProv.name,
+        genPromptId: promptProv.id,
+        genPromptName: promptProv.name,
+      }
       db.upsert(
         domain,
-        { domain, available: isAvail, description: idea, loopRunId: _loopRunId },
-        { available: isAvail, description: idea, loopRunId: _loopRunId }
+        { domain, available: isAvail, ...provFields },
+        { available: isAvail, ...provFields }
       )
       if (isAvail === true) available.push(domain)
     }
@@ -2379,6 +2661,7 @@ function onExportAvailable() {
 // --- Init ---
 async function init() {
   await hydrate()
+  _initProvTooltip()
   loadTemperature()
   loadWeights()
   loadSearchZones()
@@ -2424,6 +2707,10 @@ Object.assign(window, {
   promptSaveFavs,
   restoreSet,
   deleteSet,
+  mergeSet,
+  mergeSelectedSets,
+  toggleSetSelected,
+  clearSetSelection,
   toggleSectionCollapse,
   toggleSetsCollapse,
   toggleSearchCollapse,

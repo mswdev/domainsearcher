@@ -550,6 +550,10 @@
                 <input id="savedFilterNoNums" type="checkbox" onchange="onSavedFilterChange()"
                   class="w-3.5 h-3.5 accent-green-500"> No numbers
               </label>
+              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap" title="Show only domains from the most recent search or loop run">
+                <input id="savedFilterLastSearch" type="checkbox" onchange="onSavedFilterChange()"
+                  class="w-3.5 h-3.5 accent-cyan-500"> From last search
+              </label>
               <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
                 Min len <input id="savedFilterMinLen" type="number" min="2" max="30" placeholder="—"
                   oninput="onSavedFilterChange()"
@@ -608,6 +612,10 @@
               <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap">
                 <input id="historyFilterFav" type="checkbox" onchange="onHistoryFilterChange()"
                   class="w-3.5 h-3.5 accent-orange-500"> Favorites only
+              </label>
+              <label class="flex items-center gap-1.5 text-gray-600 cursor-pointer whitespace-nowrap" title="Show only domains from the most recent search or loop run">
+                <input id="historyFilterLastSearch" type="checkbox" onchange="onHistoryFilterChange()"
+                  class="w-3.5 h-3.5 accent-cyan-500"> From last search
               </label>
               <label class="flex items-center gap-1.5 text-gray-600 whitespace-nowrap">
                 Min len <input id="historyFilterMinLen" type="number" min="2" max="30" placeholder="—"
@@ -706,6 +714,6 @@
     </div>
   </footer>
 
-  <script type="module" src="js/app.js?v=39"></script>
+  <script type="module" src="js/app.js?v=44"></script>
 </body>
 </html>
